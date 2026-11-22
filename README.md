@@ -1,0 +1,538 @@
+# Tsuzuki
+
+Claude Code のセッションの記録を読んで、手元に台帳（`~/.tsuzuki/` に置く SQLite のデータベース）を作るツールです。ブラウザの画面から過去のセッションを探し、どこまで進んでいたかを確かめ、続きを再開できます。台帳づくりも画面もモデルを呼ばないので、トークンは消費しません。
+
+macOS 用で、画面と説明は日本語です。Anthropic の公式のツールではありません。
+
+初めて使うときは「導入」までを順に読めば始められます。「使い方」から後は、必要になったときに開いてください。チケット1枚分の作業をタスクとしてまとめるなら、「タスク」の節も読んでください。
+
+## 何をするか
+
+セッションが増えても、目的の情報と作業の続きに数秒で戻れるようにします。画面でできることは6つです。
+
+- 会話・資料・入力履歴をまたいで、日本語の部分一致で検索する
+- 状況カードで、セッションの題名、場所、期間、直近の要約、最初と最後の依頼、資料、つながりを1枚で見る
+- 分岐、続きの会話、子セッションといった、セッション同士のつながりをたどる
+- セッションが作った・直した・読んだ文書（資料）を一覧し、Markdown と HTML はその場で読む
+- VS Code・Terminal・コマンドのコピーの3通りで再開する
+- チケット1枚分の作業をタスクとしてまとめ、段階、結び付いた会話と資料を1枚のカードで見る
+
+「場所」は作業ディレクトリをまとめた単位で、たいていは Git のリポジトリの根です。「ヘッドレス」は `claude -p` などで起動した、人が対話しないセッションを指します。
+
+Claude Code は既定では30日たった記録を消します（設定 `cleanupPeriodDays`）。そのあとも、台帳に写したカードと検索は使えます。再開だけはできなくなります。
+
+## 読む物と書く物
+
+`~/.claude` は読むだけで、書き込みません。Tsuzuki が書くのは `~/.tsuzuki/` の中と、タスクの置き場所（`~/tasks`）の中の決まった所だけです。ほかに、`tsuzuki doctor --report` と `tsuzuki templates` が、指定された書き先に書きます。タスクの置き場所に書く物は「タスク」の節にあります。
+
+| 読む物 | 何に使うか |
+|---|---|
+| `~/.claude/projects/*/*.jsonl` | セッションの記録（会話）。サブエージェントの記録は読みません |
+| `~/.claude/history.jsonl` | 入力履歴。設定 `index_history` を false にすると読みません |
+| `~/.claude/sessions/*.json` | 今動いているセッション。「実行中」の印と、再開の前の確認と、フックに使います |
+| `~/.claude/settings.json` | `tsuzuki doctor` がフックの設定を確かめるときだけ読みます |
+| 資料 | セッションが作った・直した・読んだ文書と、場所の中にある文書。拡張子が設定 `doc_extensions` にあるものだけです |
+
+`/tmp` などの一時領域にある文書は、資料に入れません。`~/.claude` の中で資料にするのは、`plans/*.md` と `projects/*/memory/*.md` だけです。本文を検索できるのは .md・.txt・.csv・.html などのテキストの資料で、PDF や Office の文書は一覧に出ても検索では見つかりません。
+
+書く物は次のとおりです。`~/.tsuzuki` は権限 0700 で作ります。
+
+| 書く物 | 中身 |
+|---|---|
+| `config.json` | 設定。初回の `tsuzuki serve` か `tsuzuki index` が、既定値を書いて作ります |
+| `ledger.db` | 台帳（権限 0600）。`ledger.db-wal` と `ledger.db-shm` も一緒にできます |
+| `token` | 画面を開くための鍵（権限 0600） |
+| `lineage.jsonl` | フックが書く、親のセッションの記録。フックを入れたときだけできます |
+| `update.lock` | 台帳の更新を1つずつ行うための印 |
+
+台帳には会話の本文の写しが入ります。`~/.claude` と同じように扱ってください。置き場所は `--ledger-dir` か環境変数 `TSUZUKI_HOME` で変えられます。
+
+## 導入
+
+必要な物は macOS、Python 3.9 以上、Claude Code です。macOS に入っている `/usr/bin/python3` で動き、外部のパッケージは使いません。
+
+### 1. 実行ファイルを作る
+
+リポジトリのフォルダーで次を実行すると、`dist/tsuzuki` ができます。画面の HTML・CSS・JavaScript も、この1つのファイルに入っています。
+
+```sh
+python3 scripts/build.py
+```
+
+別の Mac で使うときは、`dist/tsuzuki` だけを持っていけば動きます。この先のコマンドは、リポジトリのフォルダーで実行する前提で書いています。
+
+### 2. `~/.local/bin` に置く
+
+```sh
+mkdir -p ~/.local/bin && cp dist/tsuzuki ~/.local/bin/tsuzuki.new && chmod 755 ~/.local/bin/tsuzuki.new && mv ~/.local/bin/tsuzuki.new ~/.local/bin/tsuzuki
+```
+
+ブラウザやクラウドを通して持ってきたファイルは、実行の権限が外れていることがあります。`chmod 755` で付け直します。いったん `tsuzuki.new` に写してから `mv` で入れ替えるのは、写している途中のファイルを実行させないためです。フックを入れると、セッションが始まるたびに Tsuzuki が動きます。
+
+`tsuzuki --version` で版が出れば置けています。`command not found` と出るときは `~/.local/bin` に PATH が通っていないので、`~/.zshrc` に次の1行を足して Terminal を開き直します。
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+新しい版に置き換えるときは、先に `tsuzuki serve` を止めてから、上と同じコマンドで置き換えます。動かしたまま置き換えると、起動し直すまで画面には「内部のエラーが起きました」としか出なくなります。
+
+新しい版で台帳の形が変わったときは、置き換えた後の最初の更新で、取り込み済みの記録を新しい読み方で読み直します。そのときだけ初回と同じくらいの時間がかかります。記録がもう消えたセッションは、読み直さずにそのまま残します。
+
+### 3. `tsuzuki doctor` で点検する
+
+```sh
+tsuzuki doctor
+```
+
+Python、SQLite、検索の索引（FTS5 の trigram）、Claude Code の記録、`claude` コマンド、台帳のディレクトリ、フック、記録の形式を1行ずつ確かめ、✔（問題なし）・⚠（注意）・✘（使えない）で示します。✘ が1つでもあれば、終了コードは1になります。Python の版は、PATH で最初に見つかる `python3` のものです。Tsuzuki もその `python3` で動きます。
+
+初回は「台帳のディレクトリ」に「まだありません」の ⚠ が出ます。次の `tsuzuki serve` で作られるので、そのままで構いません。trigram が使えない Mac では「使えません。部分一致だけで検索します」と出ますが、検索はできます。
+
+### 4. `tsuzuki serve` で始める
+
+```sh
+tsuzuki serve
+```
+
+鍵の付いた URL（`http://127.0.0.1:8765/?key=…`）を表示し、ブラウザで開きます。初回は記録をすべて読むので時間がかかり、画面の上に「読み込み中 120/2000」のように進み具合が出ます。一覧には、読み終えたセッションから順に出ます。止めるときは Ctrl+C です。
+
+起動している間は、30秒ごとに新しい記録を取り込みます（設定 `refresh_seconds`）。すぐに取り込みたいときは、画面の「更新」を押します。ブラウザを開かずに起動するなら `tsuzuki serve --no-open`、ポートを変えるなら `tsuzuki serve --port 8766` とします。
+
+鍵は `~/.tsuzuki/token` に保存され、起動し直しても変わりません。表示された URL をブックマークしておけば、次からはそこから開けます。
+
+## 使い方
+
+### 画面：左で絞り込み、中で選び、右で読む
+
+左の列で場所を選んで絞り込み、中の列の一覧からセッションを選ぶと、右の列に状況カードが出ます。カードには題名、場所、期間、入力の回数、直近の要約、最初と最後の依頼、資料、つながりと、再開のボタンが並びます。会話の全文は「会話で開く」で読めます。長い会話は、最後のターン（検索から開いたときは一致したターン）の前後20ターンを出します。それより前と後ろは「前の 20 ターンを読む」「後の 20 ターンを読む」で読み足せます。
+
+一覧には、最後の動きが直近30日以内の対話セッションが並びます。期間は左の列の「期間」で、7日・30日・90日・全期間から選べます。ヘッドレスは、親のセッションの行の「子」から開きます。一覧に混ぜたいときは「ヘッドレスも並べる」を入れます。今動いているセッションには「実行中」の印が付きます。
+
+上の帯は「タスク」「セッション」「資料」の順です。「タスク」はタスクの一覧で、使い方は「タスク」の節にあります。「資料」に切り替えると、一覧が資料に変わります。種類（メモリ、引き継ぎ、計画、設計書など）と場所で絞り込めます。
+
+Markdown の資料の中の、言語が `mermaid` のコードブロックは、図として描きます。描くのは Tsuzuki に同梱した Mermaid（MIT ライセンス。ライセンスの文も `src/tsuzuki/ui/vendor/mermaid-LICENSE.txt` として同梱）で、sandbox を付けた枠の中で動かし、外からは何も読み込みません。描けない図は、コードとその下の失敗の文で出します。
+
+### 検索：すべての語を含むものを探す
+
+上の検索窓に語を入れると、会話（あなたの入力と Claude の応答）、資料の題名と本文、入力履歴から日本語の部分一致で探します。会話の一致はセッションごとにまとめて出ます。
+
+- 空白で区切った語は、すべてを含むものを探します。会話では、1回の入力とそれに続く応答の中に、すべての語がそろっているものを探します
+- 空白を含む語は `"git push"` のように `"` で囲みます
+- 入力履歴は、会話が台帳にないセッションの分だけを出します。Tsuzuki が読む前に記録が消えたセッションや、`retention` を `"card"` にして本文を消したセッションの分です。それ以外の入力は、会話として出ます
+- 「ヘッドレスも並べる」を入れると、ヘッドレスの要約も探します
+
+検索しているときは、左の列で期間（7日・30日・90日・すべて）、発言者（すべて・本人・Claude）、並び順（一致の新しい順・一致したターンの多い順）を選べます。発言者は会話だけに効き、資料と入力履歴には効きません。
+
+一致は、会話・資料・入力履歴のそれぞれで100件まで出します。100件まで出たときは、一覧の見出しに「新しい順に100件まで」のように添えます。探しているものがなければ、語を足すか、場所や期間で絞ります。
+
+一致したセッションを選ぶと、カードに一致した箇所が出ます。▲▼で前後の一致へ移り、「会話で開く」でその箇所から会話を読めます。端末からは `tsuzuki search 語 …` で同じ検索ができます（「コマンド」の表）。
+
+1〜2文字の語（「設計」など）は索引を使えないので、本文を端から読みます。資料が多いと、しばらく使っていなかった後の最初の検索に1〜2秒かかることがあります（「困ったとき」）。
+
+### 再開：VS Code・Terminal・コピーの3通り
+
+| ボタン | 中で行うこと |
+|---|---|
+| VS Code で再開 | `open -a "Visual Studio Code" <フォルダー>` でそのフォルダーの窓を出し、1.5秒待ってから `vscode://anthropic.claude-code/open?session=<ID>` を開きます。Claude Code の拡張機能のパネルで、そのセッションが再開されます |
+| Terminal で再開 | AppleScript で Terminal に `cd <フォルダー> && claude --resume <ID>` を実行させます。初回は macOS がオートメーションの許可を求めます |
+| コピー | `cd <フォルダー> && claude --resume <ID>` をクリップボードに入れます。VS Code の統合ターミナルなどに貼って実行します |
+
+先にフォルダーの窓を出すのは、別のフォルダーの窓が手前にあるまま URI を開くと、その窓で新しい会話が始まってしまうためです。うまくいかなければ「コピー」を使ってください。
+
+⌘Enter と色の付いたボタンは、設定 `resume_default`（既定は `vscode`）の方法で再開します。
+
+今開いているセッションを再開しようとすると、「このセッションは今開いています。続けますか？」と確かめます。同じ記録に2つのプロセスが書き込むのを防ぐためです。記録が消えたセッションは再開できないので、ボタンは押せなくなっています。
+
+### キー操作
+
+| キー | 動き |
+|---|---|
+| `/` | 検索窓へ移る |
+| `Enter`（検索窓で） | すぐに検索して、一覧へ移る |
+| `Esc`（検索窓で） | 語を消す。空のときは検索窓から出る |
+| `↑` `↓` | 一覧の選択を動かす |
+| `Enter` | 選んだセッションの会話を開く。検索中は一致した箇所を開く |
+| `⌘Enter` | 選んだセッションを、既定の方法（`resume_default`）で再開する |
+| `Esc` | 確認の枠や知らせを閉じる |
+
+### コマンド
+
+検索や再開、台帳の更新は、端末からも行えます。`<ID>` は完全な ID か、先頭の6文字以上で指定します。
+
+| コマンド | すること |
+|---|---|
+| `tsuzuki serve [--port 番号] [--no-open]` | 画面のサーバーを起動する（Ctrl+C で終わる） |
+| `tsuzuki index [--full]` | 台帳を更新する。`--full` を付けると作り直す。作り直すと、記録がもう消えたセッション（Claude Code が古い記録を片づけた分など）は台帳からも消え、戻せない |
+| `tsuzuki search [--days 日数] [--role user\|assistant] [--order recent\|count] 語 …` | 会話・資料・入力履歴を検索する。`--days` で期間を、`--role` で会話の発言者（user は本人、assistant は Claude）を絞り、`--order count` で一致したターンの多い順に並べる。オプションは語の前に置く |
+| `tsuzuki resume [--terminal] <ID>` | 再開のコマンドを出す。`--terminal` を付けると Terminal で開く |
+| `tsuzuki forget [--undo] <ID>` | セッションを台帳から消し、以後取り込まない |
+| `tsuzuki purge --before YYYY-MM-DD` | その日より前に最後の動きがあったセッションを、台帳から消す |
+| `tsuzuki task new <短い名前> [--title 題] [--ticket 番号] [--repo パス]` | タスクのフォルダーと `task.md` を作る |
+| `tsuzuki task list [--all]` | タスクを一覧する。`--all` で完了も出す |
+| `tsuzuki templates <出力先>` | 導入物の雛形（決まり・CLAUDE.md に足す数行・スキル2つ）を書き出す |
+| `tsuzuki doctor [--report ファイル]` | 環境を点検する。`--report` を付けると診断ファイルも書く |
+| `tsuzuki hook session-start` | フックから呼ばれる。自分で実行するものではない |
+| `tsuzuki --version` | 版を出す |
+
+サブコマンドの前に `--claude-dir <ディレクトリ>` を付けると、読む Claude Code の設定ディレクトリを変えられます。`--ledger-dir <ディレクトリ>` なら台帳の置き場所です。
+
+## 設定
+
+設定は `~/.tsuzuki/config.json` に書きます。初回の `tsuzuki serve` か `tsuzuki index` が、すべての項目に既定値を入れたファイルを作ります。変えた設定は次に実行したときから効くので、動いている `tsuzuki serve` は起動し直します。`retention` などの値が正しくないときは、「設定 retention は all・card・none のどれかにしてください」のように知らせて終わります。
+
+| 項目 | 既定 | 意味 |
+|---|---|---|
+| `port` | `8765` | 待ち受けるポート。`--port` か環境変数 `TSUZUKI_PORT` があれば、そちらを使います（`--port` が先） |
+| `open_browser` | `true` | `tsuzuki serve` でブラウザを開くか。`--no-open` を付ければ、こちらによらず開きません |
+| `refresh_seconds` | `30` | 記録を見に行く間隔（秒） |
+| `claude_dir` | `"~/.claude"` | Claude Code の設定ディレクトリ。`--claude-dir` か環境変数 `CLAUDE_CONFIG_DIR` があれば、そちらを使います（`--claude-dir` が先） |
+| `retention` | `"all"` | 記録が消えたときに台帳に残す物。`"all"` はすべて、`"card"` は会話の本文を消してカードとつながりを残し、`"none"` は何も残しません |
+| `max_age_days` | `null` | 台帳に残す日数（正の整数）。最後の動きからこの日数を過ぎたセッションを、更新のたびに台帳から消します。`null` なら消しません |
+| `index_history` | `true` | 入力履歴を索引に入れるか。`false` にすると、入れてあった分も索引から外します |
+| `resume_default` | `"vscode"` | ⌘Enter と色の付いたボタンの再開の方法。`"vscode"`・`"terminal"`・`"copy"` のどれか |
+| `vscode_app` | `"Visual Studio Code"` | 再開や、資料・場所を開くときに使うアプリの名前 |
+| `vscode_uri_delay_ms` | `1500` | VS Code の窓を出してから URI を開くまでの待ち（ミリ秒） |
+| `display_strip_prefixes` | `[]` | 場所の表示名から外す接頭辞。`["/Users/YOUR_NAME/dev"]` なら `/Users/YOUR_NAME/dev/app` を `app` と表示します。`~` は使えないので絶対パスで書きます |
+| `place_aliases` | `{}` | 場所のまとめ直し。`{"~/work/old": "~/work/app"}` なら、`~/work/old` とその下で動いたセッションを `~/work/app` の場所にまとめます |
+| `doc_extensions` | `[".md", ".markdown", ".mdx", ".txt", ".html", ".htm", ".csv", ".pdf", ".docx", ".pptx", ".xlsx"]` | 資料とみなす拡張子 |
+| `doc_scan` | 下の表のとおり | 場所の中から資料を探す走査 |
+| `headless_in_list` | `false` | 画面の「ヘッドレスも並べる」を、初めから入れておくか |
+| `tasks_root` | `"~/tasks"` | タスクの置き場所 |
+| `ticket_url` | `null` | チケットの URL の型。`{n}` が番号に替わります（例: `"https://github.com/org/repo/issues/{n}"`）。`null` なら、タスクのリポジトリの `.git/config` にある `origin` から、GitHub の課題の URL（`https://<ホスト>/<owner>/<repo>/issues/<番号>`）を作ります。作れないときは番号だけを出します |
+| `new_conversation_prompt` | `"@{task_md} を読んで、次の一手から進めてください。"` | 「新しい会話」の最初の依頼。`@{task_md}` は `@<task.md の絶対パス>` に替わり、空白を含むパスなら `@"…"` で囲みます。`@` のない `{task_md}` は、絶対パスだけに替わります |
+| `default_branches` | `["main", "master", "develop"]` | セッションのブランチがこれらのときは、「同じブランチ」を根拠にタスクへ結び付けません |
+
+`doc_scan` の中身は次のとおりです。
+
+| 項目 | 既定 | 意味 |
+|---|---|---|
+| `enabled` | `true` | 走査するか。`false` なら、セッションが触れた文書だけを資料にします |
+| `max_depth` | `6` | 場所から何段下のフォルダーまで見るか |
+| `max_files` | `3000` | 1つの場所で拾う資料の数の上限 |
+| `interval_seconds` | `600` | 走査の間隔（秒）。その場所のセッションが動いたときは、間隔によらず走査します |
+| `exclude_dirs` | 下に書いた15個 | 中を見ないフォルダーの名前 |
+
+`exclude_dirs` の既定は `.git`、`node_modules`、`.venv`、`venv`、`__pycache__`、`.mypy_cache`、`.ruff_cache`、`.pytest_cache`、`.next`、`.wrangler`、`.dart_tool`、`build`、`Pods`、`DerivedData`、`.playwright-mcp` です。
+
+## 親を記録するフック（任意）
+
+ヘッドレスのセッションが、どのセッションから起動されたか（親）を確実に記録するためのフックです。入れなくても、ほかの機能はすべて動きます。その場合は、記録の中の手がかりから親を推し量ります。
+
+フックは Claude Code の `SessionStart` フックとして `tsuzuki hook session-start` を実行します。セッションが始まるたびに、自分のプロセスから親のプロセスを最大12段たどり、`~/.claude/sessions/<PID>.json` を手がかりに親のセッションを見つけます。結果は `~/.tsuzuki/lineage.jsonl` に1行（時刻、自分と親の ID、起動の種類、作業ディレクトリなど）として足します。モデルは呼びません。`SessionStart` フックの標準出力は Claude の文脈に足されるので、標準出力には何も書きません。失敗しても終了コード0で終わります。
+
+入れるときは、`~/.claude/settings.json` を自分で開いて次を足します。Tsuzuki がこのファイルを書き換えることはありません。
+
+```json
+"hooks": {
+  "SessionStart": [
+    { "hooks": [ { "type": "command", "command": "\"$HOME/.local/bin/tsuzuki\" hook session-start", "timeout": 5 } ] }
+  ]
+}
+```
+
+`"hooks"` や `"SessionStart"` がすでにあるときは、置き換えずに足し合わせます。`SessionStart` の配列に、Tsuzuki の分を1つ加える形です。
+
+```json
+"SessionStart": [
+  { "hooks": [ { "type": "command", "command": "（前からあるフック）" } ] },
+  { "hooks": [ { "type": "command", "command": "\"$HOME/.local/bin/tsuzuki\" hook session-start", "timeout": 5 } ] }
+]
+```
+
+足したあとで新しいセッションを1つ始め、`tsuzuki doctor` の「フック」が「設定済み・最近の記録あり」になれば動いています。`--bare` を付けて起動したセッションでは、フックは動きません。
+
+## ログイン時に起動する（任意）
+
+launchd に登録すると、ログインしたときに `tsuzuki serve --no-open` が起動します。ログは `~/.tsuzuki/serve.log` に書くので、先に「導入」を済ませて `~/.tsuzuki` を作っておきます。
+
+1. リポジトリの `docs/launchd/local.tsuzuki.serve.plist` を、`~/Library/LaunchAgents/` に写します。このフォルダーがまだないアカウントもあるので、先に作ってから写します。
+
+   ```sh
+   mkdir -p ~/Library/LaunchAgents && cp docs/launchd/local.tsuzuki.serve.plist ~/Library/LaunchAgents/
+   ```
+
+2. 写したファイルにある3か所の `/Users/YOUR_NAME` を、自分のホームの絶対パスに置き換えます。launchd は `~` を展開しないためです。エディターで直しても、次のコマンドで置き換えても構いません。
+
+   ```sh
+   sed -i '' "s|/Users/YOUR_NAME|$HOME|g" ~/Library/LaunchAgents/local.tsuzuki.serve.plist
+   ```
+
+3. launchd に読み込ませます。すぐに起動し、以後はログインのたびに起動します。止まっても、自動では起動し直しません。手で起動した `tsuzuki serve` が動いていれば、先に Ctrl+C で止めておきます。動いたままだと、launchd が起動した方はポートが使用中のため終わり、そのまま止まっています。
+
+   ```sh
+   launchctl load ~/Library/LaunchAgents/local.tsuzuki.serve.plist
+   ```
+
+鍵の付いた URL は、`~/.tsuzuki/serve.log` に出ています。
+
+```sh
+grep 'key=' ~/.tsuzuki/serve.log | tail -n 1
+```
+
+Tsuzuki を新しい版に置き換えるときや、設定を変えたときは、`launchctl unload` で止めてから作業し、`launchctl load` で起動し直します。
+
+```sh
+launchctl unload ~/Library/LaunchAgents/local.tsuzuki.serve.plist
+launchctl load ~/Library/LaunchAgents/local.tsuzuki.serve.plist
+```
+
+## タスク
+
+### タスクとは
+
+タスクは、`~/tasks` の下のフォルダー1つです。フォルダーの名前は `YYYY-MM-DD-<短い名前>` で、中に表紙の `task.md` を置きます。表紙には、題・チケット・リポジトリ・段階を書く先頭の情報と、`目的`・`現在地`・`次の一手`・`待っていること`・`決めたこと`・`資料` の6つの見出しがあります。調査や設計書、計画などの資料も、このフォルダーに入れます。複数のタスクで使う資料は `shared/` に置きます。
+
+```
+~/tasks/
+├── README.md              Claude 向けの決まり
+├── shared/                共通の資料
+└── 2026-11-22-login-fix/
+    ├── task.md            表紙
+    └── design-login.md    資料（名前の先頭の語で種類が決まる）
+```
+
+Tsuzuki は `task.md` を読んで、画面の「タスク」に一覧とカードを出します。段階は `チケット`・`調査`・`調整`・`実装`・`PR`・`修正`・`完了` の7つです。セッションと資料はタスクに結び付き、カードに根拠とともに出ます。
+
+Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと `task.md`、既存の `task.md` の `stage` と `waiting` の行だけです。本文は書き換えません。本文を書くのは、Claude（スキル）かあなたです。
+
+### 導入
+
+先に「導入」の1〜4を済ませてください。ここでは、`dist/tsuzuki` を `~/.local/bin/tsuzuki` に置いてある前提で書きます。
+
+設定 `tasks_root` でタスクの置き場所を変えたときは、この節の `~/tasks` を、手順1で `tsuzuki templates` が表示する置き場所に読み替えてください。環境変数 `CLAUDE_CONFIG_DIR` で Claude Code の設定ディレクトリを変えているときは、この節の `~/.claude` をその場所に読み替えます。
+
+1. 雛形を書き出します。
+
+   ```sh
+   tsuzuki templates ~/Downloads/tsuzuki-templates
+   ```
+
+   次の4つが書き出され、置く場所も表示されます。同じ名前のファイルがあるときや、出力先が Claude の設定ディレクトリの中のときは、何も書かずに終わります。
+
+   | 書き出されるファイル | 置く場所 |
+   |---|---|
+   | `tasks/README.md` | `~/tasks/README.md` |
+   | `CLAUDE.md-snippet.md` | 中身を `~/.claude/CLAUDE.md` の末尾に足す |
+   | `skills/task-start/SKILL.md` | `~/.claude/skills/task-start/SKILL.md` |
+   | `skills/task-handoff/SKILL.md` | `~/.claude/skills/task-handoff/SKILL.md` |
+
+2. 決まりを置きます。
+
+   ```sh
+   mkdir -p ~/tasks && cp ~/Downloads/tsuzuki-templates/tasks/README.md ~/tasks/README.md
+   ```
+
+3. `CLAUDE.md-snippet.md` の中身を、`~/.claude/CLAUDE.md` の末尾に足します。ファイルがなければ作ります。
+
+   ```sh
+   cat ~/Downloads/tsuzuki-templates/CLAUDE.md-snippet.md >> ~/.claude/CLAUDE.md
+   ```
+
+   同じ操作を2回すると同じ文が2回入るので、足したあとで中身を開いて確かめてください。
+
+4. `~/.claude/settings.json` の `permissions.additionalDirectories` に、タスクの置き場所を足します。これで、リポジトリで開いた会話から、タスクのフォルダーに書き込めます。**絶対パス**で書いてください。
+
+   ```json
+   {
+     "permissions": {
+       "additionalDirectories": ["/Users/<名前>/tasks"]
+     }
+   }
+   ```
+
+   すでに `permissions` や `additionalDirectories` があるときは、その中に足します。足した後も、タスクのフォルダーへの書き込みでは、リポジトリの中への書き込みと同じように許可の確認が出ます。確認なしで書けるようになるわけではありません。
+
+5. スキル2つを置きます。
+
+   ```sh
+   mkdir -p ~/.claude/skills && cp -R ~/Downloads/tsuzuki-templates/skills/task-start ~/Downloads/tsuzuki-templates/skills/task-handoff ~/.claude/skills/
+   ```
+
+   新しい会話から使えます。
+
+6. `tsuzuki doctor` で確かめます。
+
+   ```sh
+   tsuzuki doctor
+   ```
+
+   タスクについて、次の5行が増えます。
+
+   | 項目 | 見ること |
+   |---|---|
+   | タスクの置き場所 | `~/tasks`（設定 `tasks_root`）があるか |
+   | タスクの決まり（README.md） | `~/tasks/README.md` があるか |
+   | Claude Code の書き込みの許可 | `additionalDirectories` にタスクの置き場所があるか |
+   | スキル（task-start・task-handoff） | 2つのスキルが置いてあるか |
+   | CLAUDE.md の決まり | `~/.claude/CLAUDE.md` に `~/tasks/README.md` のパスがあるか |
+
+   ⚠ や ✘ が出たら、その行の指示に従って直し、もう一度実行します。
+
+### 使い方
+
+**タスクを始める。** 次のどれでも始められます。
+
+- Claude に「タスクを始めて」「チケット #123 でタスクを作って」と頼む（スキル `task-start`）。題・短い名前・チケット・リポジトリを決めて、フォルダーと `task.md` を作ります。最後に `@<task.md のパス>` を示すので、それを新しい会話で使います
+- 端末で作る
+
+  ```sh
+  tsuzuki task new login-fix --title "ログインの不具合" --ticket 123 --repo ~/dev/app
+  ```
+
+- 画面の「タスク」の「＋ 新しいタスク」から作る
+
+**引き継ぐ。** 作業を区切るときに、Claude に「引き継ぎを書いて」「今日はここまで」と頼みます（スキル `task-handoff`）。`task.md` の `現在地`・`次の一手`・`待っていること` を、その会話の内容で書き直します。次の会話は、ここから始められます。
+
+**画面のタスクのカード。**
+
+- 続きから：結び付いた最新の対話セッションを、既定の方法（`resume_default`）で再開します。再開できる会話がなければ、その理由を出します
+- 新しい会話：`task.md` を渡した新しい会話を始めます。VS Code では、入力欄に依頼が入るだけで、送信はしません。Terminal では `claude "<依頼>"` で、依頼を送った状態で始まります。依頼の文は設定 `new_conversation_prompt` で変えられます
+- `@` コピー、まとめてコピー：`task.md` や資料のパスを `@<絶対パス>` の形でコピーします。空白を含むパスは `@"…"` で囲みます。会話に貼ると、作業ディレクトリの外のファイルも渡せます
+- 段階：押して変えます。PR は、記録に PR が残っていれば自動で示します
+- 待ちにする、待ちを解く：人や外の返事を待つタスクに印を付け、外します。待ちは `task.md` の `waiting` の行に書かれます
+- 外す：会話の行のボタンで、そのセッションをタスクから外します。外せるのはセッションだけで、資料は外せません
+
+セッションのカードと会話の画面には「タスクに足す」があり、まだ結び付いていないタスクに、手で足せます。
+
+### 設定
+
+タスクの設定は、`~/.tsuzuki/config.json` の `tasks_root`、`ticket_url`、`new_conversation_prompt`、`default_branches` です。意味は「設定」の表にあります。`ticket_url` を決めると、カードのチケットが、その URL へのリンクになります。決めなければ、タスクのリポジトリの `origin` から GitHub の課題へのリンクを作ります。たとえば `origin` が `git@github.com:org/repo.git` でチケットが `#123` なら、`https://github.com/org/repo/issues/123` を開きます。
+
+### 制約
+
+- 資料の種類のうち、自動メモリと計画は `~/.claude` の中の決まった場所で見分けます。`CLAUDE_CONFIG_DIR` で設定ディレクトリを変えているときは、この2つの種類が付きません
+- カードの PR は、Claude Code が会話の記録に残す PR の情報から拾います。GitHub Enterprise などで記録に残らないときは、PR は出ません
+
+## 安全の守り方
+
+画面のサーバーは、この Mac の中から、鍵を持って来た要求だけを受け付けます。
+
+- 待ち受けは `127.0.0.1` だけで、ほかのマシンからはつながりません。`Host` が `127.0.0.1:<ポート>` か `localhost:<ポート>` でない要求も断ります（DNS rebinding の対策）
+- 鍵は初回に作る32バイトの乱数で、`~/.tsuzuki/token`（権限 0600）に置きます。URL に付いた鍵を確かめたら、HttpOnly・SameSite=Strict のクッキーに入れ、以後はクッキーで確かめます。鍵のない要求は 403 で断ります
+- 再開や更新のように状態を変える操作は POST でだけ受け付け、`Origin` と、専用のヘッダーで送られる鍵（起動ごとに作る）を確かめます
+- ファイルの中身を返すのは、台帳に資料として入っているものだけです。要求に書かれたパスを、そのまま開くことはしません
+- 画面のスクリプトは同じサーバーからだけ読み、外部の配信元（CDN）は使いません（CSP `default-src 'self'`）。HTML の資料は sandbox を付けた枠に表示するので、資料の中のスクリプトは画面にもクッキーにも触れません。この枠では外部のスクリプト・画像などを自動では読み込みません（元の表示は「ブラウザで開く」で見られます）。ただし、資料の中のスクリプトは枠の中で動くので、枠の中のページを外のサイトへ移すこと（資料の文を URL に載せて送ることも含む）までは止められません
+- 外部へは通信しません。モデルを呼ばないので、トークンも消費しません。Claude の認証情報は読みません
+- 外部のコマンド（`open`、`osascript`、`ps`、`tsuzuki doctor` が使う `claude`）は、シェルを通さずに実行します
+- 要求の記録（アクセスログ）は書きません。URL に検索の語が入るためです。要求の処理に失敗したときだけ、例外の種類とコードの位置を1行、標準エラーに書きます
+
+## 台帳から消す
+
+Tsuzuki が消すのは台帳の中身だけで、Claude Code の記録は消しません。消し方は目的で選びます。
+
+| したいこと | 方法 |
+|---|---|
+| 1つのセッションを消す（秘密を貼ってしまったときなど） | `tsuzuki forget <ID>` |
+| ある日より前をまとめて消す | `tsuzuki purge --before 2026-01-01` |
+| 古いセッションを自動で消し続ける | 設定 `max_age_days` |
+| Claude Code が記録を消したとき、台帳の分も消す | 設定 `retention` を `"card"`（本文だけ）か `"none"`（すべて）にする |
+
+`purge` は、最後の動きがその日の0時（地方時）より前のセッションを消します。`forget` と `purge` で消したセッションは、記録が `~/.claude` に残っていても、以後は取り込みません。入力履歴のうち、そのセッションの分も検索に出なくなります。どちらも `tsuzuki forget --undo <ID>` で取り消せ、次の更新で取り込み直します。
+
+`forget`・`purge`・`forget --undo` を台帳の更新の途中に実行すると、「台帳の更新が終わるのを待っています」と出して、更新が終わってから行います。完全な ID を指定して、そのセッションが台帳になかったときは「台帳にこのセッションはありません」と出ます。この場合も、その ID は以後取り込みません。
+
+`max_age_days` で消したセッションは、再開して動きがあれば、また取り込みます。記録を残してよい期間に決まりがあるときは、`retention` と `max_age_days` をそれに合わせます。
+
+ID は、画面の「コピー」で写したコマンドの末尾（`claude --resume <ID>`）にあります。`tsuzuki resume` に先頭の6文字を渡しても、完全な ID の入ったコマンドが出ます。
+
+### Claude Code の記録そのものを消す
+
+記録は自分で消します。先に `tsuzuki forget` で台帳から消しておくと、Tsuzuki の検索にも出なくなります。`<ID>` は実際の ID に置き換えてください。
+
+```sh
+tsuzuki forget <ID>
+ls ~/.claude/projects/*/<ID>.jsonl
+rm ~/.claude/projects/*/<ID>.jsonl
+```
+
+`ls` で、消すファイルが1つだけ出ることを確かめてから `rm` します。同じフォルダーに `<ID>` という名前のフォルダー（サブエージェントの記録など）があれば、それも消します。消した記録は、Claude Code でも再開できなくなります。入力履歴の `~/.claude/history.jsonl` は Claude Code のファイルなので、その行は残ります。
+
+## 取り除き方
+
+1. フックを入れていれば、`~/.claude/settings.json` から Tsuzuki の分を外します。実行ファイルを先に消すと、セッションが始まるたびにフックが失敗します。
+2. ログイン時に起動する設定を入れていれば、止めて消します。
+
+   ```sh
+   launchctl unload ~/Library/LaunchAgents/local.tsuzuki.serve.plist
+   rm ~/Library/LaunchAgents/local.tsuzuki.serve.plist
+   ```
+
+3. 実行ファイルと台帳を消します。
+
+   ```sh
+   rm ~/.local/bin/tsuzuki
+   rm -rf ~/.tsuzuki
+   ```
+
+Tsuzuki は `~/.claude` に何も書いていないので、ほかに片づける物はありません。
+
+## 困ったとき
+
+まず `tsuzuki doctor` を実行します。人に相談するときは、診断ファイルを付けます。
+
+```sh
+tsuzuki doctor --report ~/Desktop/tsuzuki-report.json
+```
+
+診断ファイルには会話の中身（本文・題名・パス）を入れず、版、件数、記録の項目の名前だけを書きます（権限 0600）。渡す前に、中を開いて確かめられます。
+
+### 「zsh: permission denied: tsuzuki」と出る
+
+`~/.local/bin/tsuzuki` に実行の権限がありません。ブラウザやクラウドを通して持ってきたファイルで起きることがあります。権限を付け直します。
+
+```sh
+chmod 755 ~/.local/bin/tsuzuki
+```
+
+### 「台帳を開けませんでした（使用中かもしれません）: database is locked」と出る
+
+台帳にほかの Tsuzuki が書き込んでいて、5秒待っても終わらなかったときに出ます。少し待ってから、もう一度実行します。
+
+### 「ポート 8765 は使用中です。--port か設定 port で別の番号を指定してください」と出る
+
+`tsuzuki serve` がすでに動いていないか確かめます。ログイン時に起動する設定を入れていれば、それが動いています。ほかのプログラムが使っているときは、`tsuzuki serve --port 8766` か設定 `port` で番号を変えます。何が使っているかは次のコマンドで分かります。
+
+```sh
+lsof -nP -iTCP:8765 -sTCP:LISTEN
+```
+
+### 画面に「tsuzuki serve が表示した URL から開いてください」と出る
+
+ブラウザに鍵のクッキーがありません。クッキーはブラウザを終えると消えることがあります。`tsuzuki serve` が表示した、`?key=` の付いた URL から開き直します。ログイン時に起動しているなら、URL は `~/.tsuzuki/serve.log` にあります。
+
+### 画面に「内部のエラーが起きました」としか出ない
+
+`tsuzuki serve` を動かしたまま実行ファイルを置き換えると、こうなります。`tsuzuki serve` を起動し直します。
+
+### 「記録の形式が変わった可能性があります」と出る
+
+Claude Code の更新で、記録の形式が変わったのかもしれません。`tsuzuki doctor --report` の診断ファイルで、記録の種類ごとの項目の名前を確かめます。
+
+### 「Terminal で再開」で「開けませんでした」と出る
+
+初回に出たオートメーションの許可を断ると、Terminal を操作できません。このときは「開けませんでした」の後に「Not authorized to send Apple events to Terminal」のような理由が出ます。システム設定の「プライバシーとセキュリティ」→「オートメーション」で許可します。
+
+### 「開けませんでした: Unable to find application named …」と出る
+
+設定 `vscode_app` の名前のアプリが見つかりません。「アプリケーション」フォルダーで VS Code の名前（「.app」の前まで）を確かめ、`~/.tsuzuki/config.json` の `vscode_app` を直してから、`tsuzuki serve` を起動し直します。
+
+### 1〜2文字の語の検索が、しばらくぶりだと遅い
+
+1〜2文字の語（「設計」など）は索引で引けないので、会話と資料の本文を端から読みます。資料が多い（1万件を超えるなど）と、しばらく使っていなかった後の最初の検索に1〜2秒かかることがあります。続けて検索すれば速く返ります。3文字以上の語は索引で探すので、この遅さはありません。
+
+大きなデータを置いたフォルダー（CSV をたくさん置いたものなど）は、資料として読まないようにできます。`~/.tsuzuki/config.json` の `doc_scan` の `exclude_dirs` の並びに、そのフォルダーの名前（パスではなく名前）を足し、`tsuzuki serve` を起動し直します。その名前のフォルダーは、どの深さにあっても中を見なくなります（セッションが作った・直した・読んだ文書は、その中にあっても資料に入ります）。並びにある既定の15個は消さずに残します。
+
+```json
+"exclude_dirs": [".git", "node_modules", "（既定の残り）", "data"]
+```
+
+除くのは次の走査からで、すでに台帳に入った資料は残ります。導入した直後なら、`tsuzuki index --full` で台帳を作り直すと消えます。`--full` は記録がもう消えたセッションも台帳から消すので、使い始めてしばらくたってからは使いません。
+
+### 「VS Code で再開」で新しい会話が始まってしまう
+
+「コピー」で写したコマンドを、そのフォルダーを開いた VS Code の統合ターミナルに貼って実行します。
+
+## ライセンス
+
+MIT ライセンスです（`LICENSE`）。図を描くために同梱している Mermaid も MIT ライセンスで、ライセンスの文は `src/tsuzuki/ui/vendor/mermaid-LICENSE.txt` にあります。

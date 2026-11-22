@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ログインしたときに tsuzuki serve を起動する launchd の設定（任意。手順は README の「ログイン時に起動する」）。
+  ~/Library/LaunchAgents/ に写してから、下の3か所の YOUR_NAME の入ったパスを、自分のホームの絶対パスに
+  置き換えてください。launchd は ~ を展開しません。
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.tsuzuki.serve</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/YOUR_NAME/.local/bin/tsuzuki</string>
+		<string>serve</string>
+		<string>--no-open</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>/Users/YOUR_NAME/.tsuzuki/serve.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOUR_NAME/.tsuzuki/serve.log</string>
+</dict>
+</plist>

@@ -1,0 +1,764 @@
+/* Tsuzuki の画面の見た目。
+   色は :root の変数で持ち、暗い表示（利用者の選択、または自動のとき OS の設定）なら変数を入れ替える。style 属性は使わない（CSP で止まる）。 */
+
+:root {
+  color-scheme: light;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f7f7f5;
+  --bg-tertiary: #ecebe7;
+  --border: #e0dfda;
+  --text-primary: #1f2328;
+  --text-secondary: #5f6670;
+  --text-tertiary: #8f969f;
+  --accent: #2f6fe0;
+  --accent-text: #ffffff;
+  --selected-bg: #e7effc;
+  --mark-bg: rgba(255, 196, 0, .38);
+  --mark-current: rgba(255, 150, 0, .62);
+  --live-bg: #dcf3e1;
+  --live-text: #1a6e34;
+  --gone-bg: #fbe4e2;
+  --gone-text: #a8322a;
+  --warn-bg: #fff4d6;
+  --warn-text: #6b4e00;
+  --warn-border: #f0d98a;
+  --toast-bg: #26292e;
+  --toast-text: #f4f5f6;
+  --backdrop: rgba(20, 22, 26, .28);
+  --shadow: 0 4px 18px rgba(0, 0, 0, .12);
+  --left-width: 215px;
+  --list-width: 375px;
+  --font: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-primary: #1c1e22;
+  --bg-secondary: #22252a;
+  --bg-tertiary: #2e3238;
+  --border: #3a3f46;
+  --text-primary: #e6e8eb;
+  --text-secondary: #a5acb5;
+  --text-tertiary: #7a828c;
+  --accent: #5b8ff0;
+  --accent-text: #ffffff;
+  --selected-bg: #263449;
+  --mark-bg: rgba(255, 196, 0, .30);
+  --mark-current: rgba(255, 150, 0, .55);
+  --live-bg: #1f3b27;
+  --live-text: #8fd6a2;
+  --gone-bg: #44262a;
+  --gone-text: #f0a39b;
+  --warn-bg: #3d3416;
+  --warn-text: #f3dc95;
+  --warn-border: #5e4f1d;
+  --toast-bg: #e6e8eb;
+  --toast-text: #1c1e22;
+  --backdrop: rgba(0, 0, 0, .5);
+  --shadow: 0 4px 18px rgba(0, 0, 0, .45);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg-primary: #1c1e22;
+    --bg-secondary: #22252a;
+    --bg-tertiary: #2e3238;
+    --border: #3a3f46;
+    --text-primary: #e6e8eb;
+    --text-secondary: #a5acb5;
+    --text-tertiary: #7a828c;
+    --accent: #5b8ff0;
+    --accent-text: #ffffff;
+    --selected-bg: #263449;
+    --mark-bg: rgba(255, 196, 0, .30);
+    --mark-current: rgba(255, 150, 0, .55);
+    --live-bg: #1f3b27;
+    --live-text: #8fd6a2;
+    --gone-bg: #44262a;
+    --gone-text: #f0a39b;
+    --warn-bg: #3d3416;
+    --warn-text: #f3dc95;
+    --warn-border: #5e4f1d;
+    --toast-bg: #e6e8eb;
+    --toast-text: #1c1e22;
+    --backdrop: rgba(0, 0, 0, .5);
+    --shadow: 0 4px 18px rgba(0, 0, 0, .45);
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  font: 13px/1.6 var(--font);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 上の帯 */
+
+#top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  padding: .55rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.logo { flex: none; font-weight: 700; letter-spacing: .02em; }
+.views { flex: none; display: flex; gap: .9rem; }
+.views button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.views button:hover { color: var(--text-primary); }
+.views button[aria-current="page"] { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--accent); }
+.qbox { position: relative; flex: 1; min-width: 8rem; max-width: 430px; }
+#q {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .3rem .7rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  padding-right: 1.9rem;
+}
+#q-clear {
+  position: absolute;
+  top: 50%;
+  right: .35rem;
+  transform: translateY(-50%);
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+#q-clear:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+#q::placeholder { color: var(--text-tertiary); }
+#q:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+body.searching #q { border-color: var(--accent); }
+.narrow { display: none; align-items: center; gap: .8rem; }
+#place-select, #kind-select, #status-select { display: none; max-width: 18rem; }
+.narrow select, #list-opts select {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: .12rem .35rem;
+  background: var(--bg-primary);
+  font-size: 12px;
+}
+.idx { flex: none; margin-left: auto; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+#counts:not(:empty)::before { content: " ・ "; }
+#reindex, #theme {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: .12rem .6rem;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+#reindex:hover, #theme:hover { border-color: var(--accent); }
+
+#banner {
+  flex: none;
+  padding: .35rem 1rem;
+  font-size: 12px;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
+}
+#banner div + div { margin-top: .15rem; }
+
+/* 3つのペイン（それぞれが自分でスクロールする）。パスのように切れ目のない文字も、どこででも折り返す
+   （どのペインも横には動かさない） */
+
+#panes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--left-width) var(--list-width) minmax(0, 1fr);
+}
+#pane-left, #pane-list, #pane-detail { min-height: 0; overflow-y: auto; overflow-wrap: anywhere; }
+#pane-list, #pane-detail { border-left: 1px solid var(--border); }
+#pane-detail { padding: .85rem 1.1rem 2rem; }
+body.reading #pane-list { display: none; }
+body.reading #panes { grid-template-columns: var(--left-width) minmax(0, 1fr); }
+
+/* 左：場所・資料の種類と、一覧の表示の設定 */
+
+.ph { font-size: 11px; color: var(--text-secondary); padding: .6rem .9rem .3rem; letter-spacing: .03em; }
+.place {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .26rem .9rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* 場所の短い名前は省略（…）せず、長ければ折り返す（似た名前の末尾が切れて見分けられなくならないように） */
+.place span { flex: 1; min-width: 0; white-space: normal; }
+.place:hover { background: var(--bg-tertiary); }
+.place.on { background: var(--selected-bg); font-weight: 600; }
+.place em { flex: none; font-style: normal; font-size: 11px; color: var(--text-secondary); }
+#list-opts { padding-bottom: .8rem; }
+#list-opts .ph { margin-top: .5rem; }
+.opt { display: flex; align-items: center; gap: .45rem; padding: .26rem .9rem; white-space: nowrap; cursor: pointer; }
+.opt input { margin: 0; }
+body.docs #list-opts { display: none; }
+body.tasks #list-opts { display: none; }  /* ヘッドレスと期間はセッションの一覧だけのもの */
+/* 一覧の期間は一覧のときだけ、検索の期間・発言者・並び順は検索のときだけ */
+body.searching #opt-days-row { display: none; }
+body:not(.searching) .search-opt { display: none; }
+
+/* 中央：一覧 */
+
+.listhead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  padding: .45rem .9rem;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+.row { padding: .5rem .9rem; border-bottom: 1px solid var(--border); cursor: pointer; }
+.row:hover { background: var(--bg-tertiary); }
+.row.on {
+  background: var(--selected-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.row .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .t.gone { color: var(--text-tertiary); }
+.row .m { font-size: 11px; color: var(--text-secondary); }
+.row .r { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.row .r.none { color: var(--text-tertiary); }
+.row.child { padding: .3rem .9rem .3rem 1.9rem; font-size: 12px; background: var(--bg-primary); }
+.row.child:hover { background: var(--bg-tertiary); }
+.row.child.on { background: var(--selected-bg); }
+.row.hist { cursor: default; }
+.row.hist:hover { background: none; }
+.children:empty { display: none; }
+.children > .empty { padding: .3rem .9rem .3rem 1.9rem; background: var(--bg-primary); border-bottom: 1px solid var(--border); }
+.kids, .more {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.kids:hover, .more:hover { text-decoration: underline; }
+.kids::after, .more[aria-expanded]::after { content: " ▸"; }
+.kids[aria-expanded="true"]::after, .more[aria-expanded="true"]::after { content: " ▾"; }
+.children > .more { display: block; width: 100%; text-align: left; padding: .3rem .9rem .3rem 1.9rem; }
+.listnote { padding: .6rem .9rem 1rem; font-size: 11px; color: var(--text-secondary); }  /* 上限で切った一覧の最後 */
+
+/* 中央：タスクの一覧。状況の見出しの下に、題・チケット・段階の印と、
+   場所・最後の動き・会話の数・PR・実行中、2行目に次の一手（待ちなら待っていること） */
+
+.listhead .btn { flex: none; font-size: 11px; }
+.grp {
+  padding: .3rem .9rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+.row[data-task] .t { white-space: normal; }  /* 長い題でも、チケットと段階の印を切らない */
+.row[data-task] .m .badge { margin: 0 0 0 .4rem; }
+.row[data-task] .r { font-size: 12px; }
+.chip {
+  display: inline-block;
+  margin-left: .3rem;
+  padding: 0 .35rem;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  vertical-align: 1px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+.chip.tk { border: 1px solid var(--border); font-weight: 400; background: transparent; }
+.chip.tk.none { color: var(--text-tertiary); }
+.chip.stage { color: var(--accent); background: var(--selected-bg); }
+.chip.stage[title] { cursor: help; }  /* PR の記録から出している段階 */
+.chip.wait { margin: 0 .35rem 0 0; color: var(--warn-text); background: var(--warn-bg); }
+
+.badge {
+  display: inline-block;
+  margin-right: .35rem;
+  padding: 0 .35rem;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+.badge.headless { background: var(--bg-tertiary); color: var(--text-secondary); }
+.badge.live { background: var(--live-bg); color: var(--live-text); }
+.badge.gone { background: var(--gone-bg); color: var(--gone-text); }
+.badge.moved { margin: 0 0 0 .3rem; background: var(--bg-tertiary); color: var(--text-secondary); font-weight: 400; }
+.ty {
+  flex-shrink: 0;
+  padding: 0 .3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+.kind {
+  flex-shrink: 0;
+  padding: 0 .35rem;
+  border-radius: 4px;
+  font-size: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+.empty { padding: .8rem .9rem; font-size: 12px; color: var(--text-tertiary); }
+#pane-detail .empty { padding: .2rem 0; }
+
+mark { background: var(--mark-bg); color: inherit; border-radius: 3px; padding: 0 .1rem; }
+mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent); }
+
+/* 右：状況カード */
+
+.dh { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; }
+.dh h4 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.head { min-width: 0; }
+.head .meta { margin-bottom: 0; }
+.card > .dh, .place-ov > .dh, .doc-view > .dh { margin-bottom: .6rem; }
+.btns { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: .35rem; }
+/* 右の列の見出し：題が 18rem を保てないときは、ボタンを題の下の行に回す（窓の幅でなく見出しの幅で決める） */
+.task-card > .dh, .card > .dh, .doc-view > .dh, .place-ov > .dh { flex-wrap: wrap; }
+.task-card > .dh .head, .card > .dh .head, .doc-view > .dh .head, .place-ov > .dh .head { flex: 1 1 18rem; }
+.dh .btns { max-width: 100%; }
+.btn {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: .12rem .55rem;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.nav { padding: .05rem .42rem; }
+.meta { margin: .25rem 0 .6rem; font-size: 11px; color: var(--text-secondary); }
+.notice {
+  margin: 0 0 .6rem;
+  padding: .3rem .6rem;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--gone-text);
+  background: var(--gone-bg);
+}
+.recap {
+  margin-bottom: .6rem;
+  padding: .5rem .8rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+.recap.reply { border-left-color: var(--text-tertiary); }
+.recap .body { overflow-wrap: anywhere; }
+.lab { margin-bottom: .15rem; font-size: 11px; color: var(--text-secondary); }
+.after { margin-top: .3rem; font-size: 11px; color: var(--text-secondary); }
+.kv { display: grid; grid-template-columns: 6.2em minmax(0, 1fr); gap: .6rem; margin: .2rem 0; }
+.kv .k { padding-top: .1rem; font-size: 11px; color: var(--text-secondary); }
+.kv .v { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.kv .v.none { color: var(--text-tertiary); }
+.sec { display: flex; align-items: baseline; gap: .6rem; margin: .8rem 0 .3rem; font-size: 12px; font-weight: 600; }
+.sec .more { font-weight: 400; }
+.sec .btn.nav { align-self: center; }
+.sec .btn.nav + .btn.nav { margin-left: -.35rem; }
+.excerpt { padding: .5rem .75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); }
+.who { font-size: 11px; color: var(--text-secondary); }
+.excerpt .x + .who { margin-top: .4rem; }
+.x { overflow-wrap: anywhere; }
+.x.tool { font-family: var(--mono); font-size: 11px; color: var(--text-secondary); }
+.go { margin: .5rem 0 .2rem; }
+.foot { margin: 1rem 0 .2rem; }
+.doc { display: flex; align-items: baseline; gap: .5rem; padding: .12rem 0; white-space: nowrap; overflow: hidden; }
+.doc[data-doc] { cursor: pointer; }
+.doc[data-action="task-open"] { cursor: pointer; }
+.doc[data-action="task-open"]:hover .p { color: var(--accent); text-decoration: underline; }
+.taskadd { display: flex; gap: .5rem; align-items: center; padding: .12rem 0; }
+.taskadd select { min-width: 0; max-width: 18rem; }
+.row .m .task { color: var(--accent); }
+.doc[data-doc]:hover .p { color: var(--accent); text-decoration: underline; }
+.doc .p { overflow: hidden; text-overflow: ellipsis; }
+.doc .w { flex-shrink: 0; margin-left: auto; font-size: 11px; color: var(--text-secondary); }
+/* つながりの行：入りきらない部分は次の行へ回す（印は縮めない） */
+.link { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .5rem; padding: .15rem 0; cursor: pointer; }
+.link:hover .pt { color: var(--accent); text-decoration: underline; }
+.link .badge { flex-shrink: 0; }
+.rel {
+  flex-shrink: 0;
+  padding: 0 .35rem;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+.pt { min-width: 0; overflow-wrap: anywhere; }
+.tiny { font-size: 11px; color: var(--text-secondary); }
+.ev { font-size: 11px; color: var(--text-secondary); }  /* つながりの根拠（「資料 x.md」「記録に ID」など） */
+
+/* 右：場所の概要（つながりの時系列とフォルダーごとの資料） */
+
+.place-ov .cols { display: grid; grid-template-columns: 1.1fr 1fr; gap: 1.2rem; }
+.col { min-width: 0; }
+.col > .sec:first-child { margin-top: .2rem; }
+.tl { position: relative; padding-left: 1.3rem; }
+.tl::before { content: ""; position: absolute; left: .42rem; top: .4rem; bottom: .4rem; width: 2px; background: var(--border); }
+.tli { position: relative; margin-bottom: .2rem; cursor: pointer; }
+.tli::before {
+  content: "";
+  position: absolute;
+  left: -1.08rem;
+  top: .42rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.tli.other::before { background: var(--text-tertiary); }
+.tli .t { font-weight: 600; overflow-wrap: anywhere; }
+.tli:hover .t { color: var(--accent); }
+.via { margin: .05rem 0 .4rem; font-size: 11px; color: var(--accent); }
+.via .ev { margin-left: .45rem; }
+.folder { margin: .45rem 0 .05rem; font-size: 11px; color: var(--text-secondary); }
+.place-ov > .more { display: block; margin-top: 1rem; font-size: 12px; }
+.place-ov > .children { margin-top: .3rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.place-ov > .children .row:last-child { border-bottom: 0; }
+
+/* 右：資料 */
+
+.doc-view .path { font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.doc-view .link { padding: 0; font-size: 11px; color: var(--text-secondary); }
+.doc-view .link .badge { font-size: 9px; }
+.md {
+  margin-top: .6rem;
+  padding: .6rem .9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  overflow-wrap: anywhere;
+}
+.md h1 { margin: .2rem 0 .4rem; font-size: 16px; }
+.md h2 { margin: .8rem 0 .3rem; font-size: 14px; }
+.md h3, .md h4, .md h5, .md h6 { margin: .7rem 0 .25rem; font-size: 13px; }
+.md p, .md li { margin: .2rem 0; }
+.md ul, .md ol { margin: .2rem 0; padding-left: 1.4rem; }
+.md table { margin: .4rem 0; border-collapse: collapse; font-size: 12px; }
+.md th, .md td { padding: .2rem .55rem; border: 1px solid var(--border); }
+.md th { background: var(--bg-tertiary); font-weight: 600; }
+.md pre {
+  margin: .4rem 0;
+  padding: .5rem .7rem;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  overflow-wrap: normal;
+}
+.md code { font-family: var(--mono); font-size: 12px; }
+.md :not(pre) > code { padding: 0 .25rem; border-radius: 4px; background: var(--bg-tertiary); }
+.md blockquote { margin: .4rem 0; padding: 0 .8rem; border-left: 3px solid var(--border); color: var(--text-secondary); }
+.md hr { border: 0; border-top: 1px solid var(--border); }
+.md a { color: var(--accent); }
+.docnote { margin-top: .6rem; font-size: 12px; color: var(--text-tertiary); }
+.docframe {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 14rem);
+  min-height: 320px;
+  margin-top: .6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+/* Mermaid の図。枠は描けるまで高さ 0 で、描けたら（.drawn）コードの代わりに出す。
+   描けた枠の高さは、画面が枠の返事に合わせて height 属性で決める（ここでは高さを書かない）。
+   描けなければコードの下に失敗の文を1行 */
+.mermaid-block { margin: .4rem 0; }
+.mermaid-block .mermaid-src { margin: 0; }
+.mermaid-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}
+.mermaid-block:not(.drawn) .mermaid-frame { height: 0; }
+.mermaid-block.drawn .mermaid-src { display: none; }
+.mermaid-error { margin-top: .25rem; font-size: 12px; color: var(--gone-text); }
+
+/* 右：タスクのカード。段階、現在地と次の一手、欄、資料の3つの束、会話 */
+
+.task-card > .dh { margin-bottom: .4rem; }
+.btn.hint { box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 0 4px var(--accent); }  /* 作ったばかりのタスクの @task.md */
+.steps { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .2rem 0 .15rem; }
+.stp {
+  padding: .02rem .5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+.stp:hover { border-color: var(--accent); }
+.stp.done { color: var(--text-primary); }
+.stp.done::before { content: "✓ "; color: var(--live-text); }
+.stp.cur { border-color: var(--accent); font-weight: 600; color: var(--accent-text); background: var(--accent); }
+.arrow { font-size: 10px; color: var(--text-tertiary); }
+.steps .btn { margin-left: .6rem; }
+.note { font-size: 11px; color: var(--text-tertiary); }
+/* 現在地と次の一手の枠（確認の #confirm .box とは別） */
+.task-card .box {
+  margin: .6rem 0;
+  padding: .5rem .8rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+.task-card .box > .lab:not(:first-child) { margin-top: .45rem; }
+.task-card .box > .none { color: var(--text-tertiary); }
+.task-card .box > .note { margin-top: .35rem; }
+.task-card .box > .after {
+  margin-top: .5rem;
+  padding-top: .4rem;
+  border-top: 1px dashed var(--border);
+  font-size: inherit;
+  color: inherit;
+}
+/* task.md の欄（Markdown）は、枠を付けずに地の文として出す */
+.task-card .md { margin: 0; padding: 0; border: 0; border-radius: 0; background: none; }
+.task-card .md > :first-child { margin-top: 0; }
+.task-card .md > :last-child { margin-bottom: 0; }
+.task-card .kv { grid-template-columns: 7.2em minmax(0, 1fr); margin: .3rem 0; }
+.task-card .kv .v { display: block; overflow: visible; }
+.task-card .kv a { color: var(--accent); }
+.fold { margin: .55rem 0 .1rem; font-size: 11px; color: var(--text-secondary); }
+.task-card .doc { padding: .15rem 0; white-space: normal; overflow: visible; }
+.task-card .doc .ty { min-width: 4.6em; text-align: center; white-space: nowrap; }  /* 3字までの種類で題がそろう */
+.task-card .doc .p { flex: 1; min-width: 0; overflow: visible; }
+.task-card .doc .p[data-doc] { cursor: pointer; }
+.task-card .doc .p[data-doc]:hover { color: var(--accent); }
+.pick { flex: none; margin: 0; }
+.fn { margin-left: .45rem; font-family: var(--mono); font-size: 11px; color: var(--text-tertiary); }
+.ex { display: block; font-size: 11px; color: var(--text-secondary); }
+.ex.missing { color: var(--gone-text); }
+.cp {
+  flex: none;
+  padding: 0 .4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--accent);
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+.cp:hover:not(:disabled) { border-color: var(--accent); }
+.cp:disabled { opacity: .45; cursor: default; }
+.task-card .link > .more { margin-left: auto; }  /* 会話の行の「外す」は右の端に */
+
+/* 右：新しいタスクの入力欄 */
+
+.new-task { max-width: 40rem; }
+.new-task > .dh { margin-bottom: .6rem; }
+.new-task .kv { grid-template-columns: 6rem minmax(0, 1fr); align-items: center; margin: .45rem 0; }
+.new-task .kv .k { padding-top: 0; }
+.new-task input, .new-task select {
+  width: 100%;
+  min-width: 0;
+  padding: .3rem .55rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+.new-task input::placeholder { color: var(--text-tertiary); }
+.new-task input:focus, .new-task select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.new-task .note { margin: -.2rem 0 .45rem calc(6rem + .6rem); }
+.new-task .btns { justify-content: flex-start; margin-top: .7rem; padding-left: calc(6rem + .6rem); }
+
+/* 右：会話 */
+
+.conv > .dh {
+  position: sticky;
+  top: -.85rem;
+  z-index: 2;
+  margin: -.85rem 0 .2rem;
+  padding: .85rem 0 .5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.conv .btns { align-items: center; }
+.back {
+  display: block;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.back:hover { color: var(--accent); }
+.hits { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.turn { margin: .55rem 0; scroll-margin-top: 5.5rem; }
+.turn .b { padding: .4rem .7rem; border-radius: 8px; overflow-wrap: anywhere; }
+.turn.u .b { background: var(--selected-bg); }
+.turn.a .b { border: 1px solid var(--border); background: var(--bg-primary); }
+.tools {
+  margin: .55rem 0;
+  padding: .25rem .6rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.tools summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 長い会話の前後を読み足すボタン */
+.conv-more {
+  display: block;
+  width: 100%;
+  margin: .55rem 0;
+  padding: .3rem .6rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: none;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.conv-more:hover:not(:disabled) { border-color: var(--accent); }
+.conv-more:disabled { opacity: .5; cursor: default; }
+.tools ol { margin: .3rem 0 .1rem; padding-left: 1.6rem; }
+.tools li { overflow-wrap: anywhere; font-family: var(--mono); }
+
+/* 知らせと確認 */
+
+#toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem .7rem;
+  max-width: min(34rem, calc(100vw - 2rem));
+  padding: .55rem .9rem;
+  border-radius: 8px;
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  box-shadow: var(--shadow);
+}
+#toast input {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: .2rem .4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+#toast button {
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  padding: .05rem .55rem;
+  font-size: 12px;
+  background: none;
+  cursor: pointer;
+}
+#confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+  background: var(--backdrop);
+}
+#confirm .box {
+  max-width: min(28rem, calc(100vw - 2rem));
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow);
+}
+#confirm p { margin: 0; }
+#confirm .btns { margin-top: .9rem; }
+
+/* 狭い窓（1,200px 未満）：左の列を畳み、場所（と資料の種類・一覧の表示）は上の帯の2段目で選ぶ */
+
+@media (max-width: 1199.98px) {
+  #pane-left { display: none; }
+  #place-select { display: inline-block; }
+  body.docs #kind-select { display: inline-block; }
+  body.tasks #status-select { display: inline-block; }
+  #panes { grid-template-columns: var(--list-width) minmax(0, 1fr); }
+  body.reading #panes { grid-template-columns: minmax(0, 1fr); }
+  #top { flex-wrap: wrap; gap: .45rem .9rem; }
+  .narrow { display: flex; order: 1; flex-basis: 100%; }
+  #opts-slot #list-opts { display: flex; align-items: center; gap: .8rem; padding: 0; }
+  #opts-slot #list-opts .ph { display: none; }
+  #opts-slot .opt { padding: 0; font-size: 12px; }
+  body.docs #opts-slot #list-opts { display: none; }
+  body.tasks #opts-slot #list-opts { display: none; }
+}
