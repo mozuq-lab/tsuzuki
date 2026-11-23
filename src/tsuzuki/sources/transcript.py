@@ -13,7 +13,8 @@ MAX_LINE_BYTES = 8_000_000
 KNOWN_TYPES = frozenset("""user assistant system attachment ai-title custom-title agent-name continued-in
 pr-link relocated last-prompt mode permission-mode session-owner data-flow-records atis-latch api-request
 api-request-blob api-request-shape file-history-snapshot file-history-delta tools-used summary
-bridge-session agent-setting queue-operation derived-from""".split())
+bridge-session agent-setting queue-operation derived-from
+cost-state worktree-state frame-link data-flow-incomplete artifact-autoreact-ledger artifact-comment-monitor""".split())
 
 # 要約の末尾の案内。版によって「(disable recaps in /config)」「(turn off recaps in /config)」と言い方が違う
 _RECAP_SUFFIX = re.compile(r"\([^()]*\brecaps\s+in\s+/config\b[^()]*\)$", re.IGNORECASE)

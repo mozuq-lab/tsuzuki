@@ -890,17 +890,39 @@ class IndexerTest(unittest.TestCase):
         self.assertEqual(rep.files_ingested, 1)
         self.assertTrue(get_meta(self.conn, "last_update_at"))
 
-    def test_format_warning_share_kept_until_healthy_pass(self):
+    def test_format_warning_needs_enough_records(self):
+        # 読んだ行が少ない回は、知らない種類ばかりでも知らせない（管理用の行が数行だけ足された回など）
+        self.fake.write("/w", sid(1), [user("a", t(0), sid(1), "/w")])
+        self.assertIsNone(self.run_update().format_warning)
+        self.fake.append("/w", sid(1), [{"type": "zzz-new", "sessionId": sid(1)} for _ in range(5)])
+        self.assertIsNone(self.run_update().format_warning)
+        self.assertFalse(get_meta(self.conn, "format_warning"))
+
+    def test_bookkeeping_records_are_known(self):
+        # Claude Code が会話のほかに書く管理用の行は、知らない種類として数えない
         recs = [user("入力%d" % i, t(i), sid(1), "/w") for i in range(10)]
-        recs += [{"type": "zzz-new", "sessionId": sid(1)} for _ in range(10)]
+        recs += [{"type": typ, "sessionId": sid(1)} for typ in ("cost-state", "worktree-state", "frame-link",
+                                                                "data-flow-incomplete", "artifact-autoreact-ledger",
+                                                                "artifact-comment-monitor") for _ in range(10)]
+        self.fake.write("/w", sid(1), recs)
+        self.assertIsNone(self.run_update().format_warning)
+
+    def test_format_warning_share_kept_until_healthy_pass(self):
+        recs = [user("入力%d" % i, t(i), sid(1), "/w") for i in range(30)]
+        recs += [{"type": "zzz-new", "sessionId": sid(1)} for _ in range(30)]
         self.fake.write("/w", sid(1), recs)
         rep = self.run_update()
         self.assertEqual(rep.format_warning, FORMAT_WARNING + "（知らない種類の記録が50%）")
         # 何も読まなかった回は判断の材料がないので、前の知らせを残す
         self.assertEqual(self.run_update().format_warning, rep.format_warning)
         self.assertEqual(get_meta(self.conn, "format_warning"), rep.format_warning)
-        # 形式に問題のない記録を読んだ回で消える
-        self.fake.write("/w", sid(2), [user("b", t(0), sid(2), "/w")])
+        # 読んだ行が少なく判断できない回は、知らない種類ばかりでも、問題のない行ばかりでも、前の知らせを残す
+        self.fake.append("/w", sid(1), [{"type": "zzz-new", "sessionId": sid(1)} for _ in range(3)])
+        self.assertEqual(self.run_update().format_warning, rep.format_warning)
+        self.fake.write("/w", sid(3), [user("c", t(0), sid(3), "/w")])
+        self.assertEqual(self.run_update().format_warning, rep.format_warning)
+        # 形式に問題のない記録を十分に読んだ回で消える
+        self.fake.write("/w", sid(2), [user("b%d" % i, t(i), sid(2), "/w") for i in range(50)])
         rep = self.run_update()
         self.assertIsNone(rep.format_warning)
         self.assertEqual(get_meta(self.conn, "format_warning"), "")

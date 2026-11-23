@@ -33,6 +33,9 @@ FAILED_PATHS_LIMIT = 20  # UpdateReport.failed_paths に残す、読めなかっ
 DRIFT_MIN_RECORDS = 20
 # この回に読んだ行のうち、知らない種類の割合がこれを超えたら形式の変化を疑う
 DRIFT_UNKNOWN_SHARE = 0.3
+# 割合で判断するのは、この回に読んだ行がこれ以上のときだけ。少ない回は、知らせを出しも消しもしない
+# （セッションの終わりに管理用の行が数行だけ足された回などに、少ない行の割合で判断しないため）
+DRIFT_MIN_NEW_RECORDS = 50
 
 # 作り直し（full）で空にする表。tombstones と、meta のうち _KEEP_META は残す
 _REBUILD_TABLES = ("sessions", "session_prs", "messages", "digests", "history_prompts", "documents",
@@ -501,6 +504,9 @@ def _check_format(conn: sqlite3.Connection, results: Sequence[IngestResult]) -> 
     share = sum(r.unknown_records for r in results) / new if new else 0.0
     if unreadable:
         warning = "%s（%d件のファイルで会話を読み取れませんでした）" % (FORMAT_WARNING, unreadable)
+    elif new < DRIFT_MIN_NEW_RECORDS:
+        # 読んだ行が少なく判断できないので、何も読まなかった回と同じく前の知らせを残す
+        return get_meta(conn, "format_warning") or None
     elif share > DRIFT_UNKNOWN_SHARE:
         warning = "%s（知らない種類の記録が%d%%）" % (FORMAT_WARNING, round(share * 100))
     else:
