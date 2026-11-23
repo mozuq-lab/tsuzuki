@@ -145,6 +145,26 @@ class ChecksTest(DoctorTestBase):
         self.assertEqual(s["SQLite"].status, "ok")
         self.assertEqual(s["FTS5 trigram"].status, "ok")
 
+    def test_vscode_terminal_extension(self):
+        from tsuzuki.vscode_ext import EXTENSION_ID
+        name = "VS Code のターミナルの拡張"
+        self.assertEqual((self.status()[name].status, self.status()[name].detail), ("ok", "未導入（任意）"))
+        checks = {c.name: c for c in run_checks(Config(resume_default="vscode-terminal"), ledger_dir=self.ledger,
+                                                claude_dir=self.fake.dir, runner=ok_runner, now=lambda: NOW,
+                                                home=self.home)}
+        self.assertEqual(checks[name].status, "warn")
+        self.assertIn("tsuzuki vscode install", checks[name].detail)
+        ext = Path(self.home) / ".vscode" / "extensions" / (EXTENSION_ID + "-0.1.0")
+        ext.mkdir(parents=True)
+        (ext / "package.json").write_text("{}")
+        (ext / "tsuzuki.json").write_text(json.dumps({"requests_dir": str(self.ledger / "vscode-requests")}))
+        self.assertEqual((self.status()[name].status, self.status()[name].detail),
+                         ("ok", "入っています（Visual Studio Code）"))
+        # 拡張が覚えている台帳の場所が、今の台帳と違う（台帳の場所を変えて、入れ直していない）
+        (ext / "tsuzuki.json").write_text(json.dumps({"requests_dir": "/elsewhere/vscode-requests"}))
+        self.assertEqual(self.status()[name].status, "warn")
+        self.assertIn("/elsewhere/vscode-requests", self.status()[name].detail)
+
     def test_python_too_old(self):
         with mock.patch.object(doctor.sys, "version_info", (3, 8, 10, "final", 0)):
             self.assertEqual(self.status()["Python"].status, "fail")
@@ -235,7 +255,7 @@ class ChecksTest(DoctorTestBase):
 
     def test_order(self):
         self.assertEqual(list(self.status()), ["Python", "SQLite", "FTS5 trigram", "Claude Code の記録", "claude コマンド",
-                                               "台帳のディレクトリ", "フック", "記録の形式",
+                                               "台帳のディレクトリ", "フック", "記録の形式", "VS Code のターミナルの拡張",
                                                "タスクの置き場所", "タスクの決まり（README.md）",
                                                "Claude Code の書き込みの許可", "スキル（task-start・task-handoff）",
                                                "CLAUDE.md の決まり"])
@@ -256,7 +276,7 @@ class CliTest(DoctorTestBase):
         code, out = self.run_doctor()
         self.assertEqual(code, 0)
         lines = out.splitlines()
-        self.assertEqual(len(lines), 13)
+        self.assertEqual(len(lines), 14)
         self.assertTrue(lines[0].startswith("✔ Python："))
         self.assertIn("✔ Claude Code の記録：記録 1件", lines)
         self.assertIn("⚠ 台帳のディレクトリ：まだありません（初回の serve か index で作られます）", lines)

@@ -37,6 +37,8 @@ DOC_HITS_CUT = "一致は新しい順に%s件まで表示しています"
 DOC_HITS_CUT_KIND = "新しい順に%s件までの一致を、種類で絞って表示しています"
 SHORTEST_DAYS = 7  # 画面の期間の最も短い選択肢（app.js の DAY_CHOICES）。これより短くは絞れない
 RESUME_BUTTONS = (("vscode", "VS Code で再開"), ("terminal", "Terminal で再開"))
+# 拡張（vscode_ext）が入っているか、既定の再開にしているときだけ、VS Code で再開の次に出す
+VSCODE_TERMINAL_BUTTON = ("vscode-terminal", "VS Code のターミナルで再開")
 OPEN_BUTTONS = (("vscode", "VS Code で開く"), ("finder", "Finder"))  # 資料と場所
 REL_PREFIXES = {"created": "作った：", "edited": "直した：", "read": "読んだ：", "named": "名指しした："}
 # 長い会話を読み足すボタン（読み足す分、残り）
@@ -249,9 +251,10 @@ def _doc_row(item: DocItem, on: bool, snippet: str = "") -> str:
 
 def frag_card(d: SessionDetail, *, resume_default: str, hit_turns: Sequence[int] = (), hit_index: int = 0,
               excerpt: Optional[List[ConvItem]] = None, terms: Sequence[str] = (),
-              task_choices: Sequence[Tuple[str, str]] = ()) -> str:
+              task_choices: Sequence[Tuple[str, str]] = (), vscode_terminal: bool = False) -> str:
     """状況カード。hit_turns（一致したターン、新しい順）があれば検索の状態で、hit_index 番目の一致の箇所
-    （excerpt、views.turn_excerpt）を再開のボタンの後に出す。"""
+    （excerpt、views.turn_excerpt）を再開のボタンの後に出す。vscode_terminal は、VS Code のターミナルで再開する
+    拡張が入っているか（入っていれば、そのボタンも出す）。"""
     turns = [int(n) for n in hit_turns]
     index = min(max(int(hit_index), 0), len(turns) - 1) if turns else 0
     turn = turns[index] if turns else None
@@ -262,7 +265,7 @@ def frag_card(d: SessionDetail, *, resume_default: str, hit_turns: Sequence[int]
     out = ["<div%s>" % _attrs(("class", "card"), ("data-session", d.id), ("data-turns", _csv(turns)),
                               ("data-index", index)),
            '<div class="dh"><div class="head"><h4>%s%s</h4><div class="meta">%s</div></div>%s</div>' % (
-               _badges(d), _e(d.title), meta, _resume_buttons(d, resume_default))]
+               _badges(d), _e(d.title), meta, _resume_buttons(d, resume_default, vscode_terminal))]
     if not d.transcript_exists:
         out.append('<div class="notice">%s</div>' % NO_RESUME)
     if turns:
@@ -272,11 +275,14 @@ def frag_card(d: SessionDetail, *, resume_default: str, hit_turns: Sequence[int]
     return "".join(out)
 
 
-def _resume_buttons(d: SessionDetail, default: str) -> str:
+def _resume_buttons(d: SessionDetail, default: str, vscode_terminal: bool = False) -> str:
     command = d.resume_command if d.transcript_exists else None
     off = command is None  # 記録が消えた・ID の形でない・作業ディレクトリがない
+    choices = list(RESUME_BUTTONS)
+    if vscode_terminal or default == VSCODE_TERMINAL_BUTTON[0]:
+        choices.insert(1, VSCODE_TERMINAL_BUTTON)
     buttons = [_button(label, "btn pri" if how == default else "btn", ("data-action", "resume"), ("data-how", how),
-                       disabled=off) for how, label in RESUME_BUTTONS]
+                       disabled=off) for how, label in choices]
     buttons.append(_button("コピー", "btn pri" if default == "copy" else "btn", ("data-action", "copy"),
                            ("data-copy", command or ""), disabled=off))
     return '<div class="btns">%s</div>' % "".join(buttons)

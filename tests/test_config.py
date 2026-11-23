@@ -20,6 +20,12 @@ from tsuzuki.config import (
 
 
 class ConfigTest(unittest.TestCase):
+    def test_resume_default_values(self):
+        for value in ("vscode", "vscode-terminal", "terminal", "copy"):
+            with self.subTest(value), tempfile.TemporaryDirectory() as d:
+                (Path(d) / "config.json").write_text(json.dumps({"resume_default": value}), encoding="utf-8")
+                self.assertEqual(load_config(Path(d)).resume_default, value)
+
     def test_creates_defaults_and_private_dir(self):
         with tempfile.TemporaryDirectory() as d:
             ledger = Path(d) / "tsuzuki"

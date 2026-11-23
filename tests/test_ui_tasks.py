@@ -296,6 +296,9 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
                       % TASK, html)
         self.assertIn('<button class="btn" data-action="open-doc" data-doc="11" data-how="vscode">task.md を開く'
                       '</button>', html)
+        in_vscode = frag_task_card(make_detail(), resume_default="vscode-terminal")
+        self.assertIn('data-how="vscode-terminal">続きから（VS Code のターミナル）', in_vscode)
+        self.assertIn('data-how="vscode-terminal">新しい会話（VS Code のターミナル）', in_vscode)
         terminal = frag_task_card(make_detail(), resume_default="terminal")
         self.assertIn('data-action="resume" data-session="%s" data-how="terminal">続きから（Terminal）' % S1, terminal)
         self.assertIn('data-action="task-conversation" data-how="terminal">新しい会話（Terminal）', terminal)

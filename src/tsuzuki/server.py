@@ -38,6 +38,7 @@ from tsuzuki import taskviews, ui_render, ui_tasks, views
 from tsuzuki.config import Config
 from tsuzuki.indexer import UpdateReport, update, update_lock
 from tsuzuki.resume import ActionOutcome, is_session_id, open_document, open_place, resume, start_conversation
+from tsuzuki.vscode_ext import VSCodeTerminal, requests_dir
 from tsuzuki.retention import iso_utc
 from tsuzuki.search import (DEFAULT_TARGETS, MAX_TERM_CHARS, MAX_TERMS, ORDERS, RESULT_LIMIT, TARGETS, DocHit,
                            SearchQuery, SearchResult, parse_query, search)
@@ -172,6 +173,10 @@ class App:
 
     def live(self) -> Dict[str, LiveSession]:
         return live_sessions(self.claude_dir)
+
+    def vscode_terminal(self) -> VSCodeTerminal:
+        """VS Code の統合ターミナルへの依頼の書き先（<台帳>/vscode-requests）。"""
+        return VSCodeTerminal(requests_dir(self.ledger_dir), self.home, self.cfg.vscode_app)
 
     # 更新
 
@@ -605,7 +610,8 @@ def _frag_card(app: App, conn: sqlite3.Connection, session_id: str, p: _Params) 
     excerpt = views.turn_excerpt(conn, session_id, turns[index]) if turns else None
     return ui_render.frag_card(detail, resume_default=app.cfg.resume_default, hit_turns=turns, hit_index=index,
                                excerpt=excerpt, terms=terms,
-                               task_choices=taskviews.open_task_choices(conn, session_id))
+                               task_choices=taskviews.open_task_choices(conn, session_id),
+                               vscode_terminal=app.vscode_terminal().installed())
 
 
 def _frag_children(app: App, conn: sqlite3.Connection, session_id: str, p: _Params) -> str:
@@ -815,7 +821,7 @@ def _api_resume(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
         raise _HttpError(400, BAD_REQUEST % "confirm")
     with app.connect() as conn:
         return _outcome(resume(conn, session_id, how, cfg=app.cfg, live=app.live(), confirm=confirm,
-                               runner=app.runner, sleep=app.sleep))
+                               runner=app.runner, sleep=app.sleep, terminal=app.vscode_terminal()))
 
 
 def _api_open(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -898,7 +904,8 @@ def _api_task_conversation(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """タスクから新しい会話を始める。copy なら何も起動せず、貼り付けるコマンドを command で返す。"""
     task, how = _task_text(data, "task"), _task_text(data, "how")
     with app.connect() as conn:
-        out = start_conversation(conn, task, how, cfg=app.cfg, runner=app.runner, sleep=app.sleep)
+        out = start_conversation(conn, task, how, cfg=app.cfg, runner=app.runner, sleep=app.sleep,
+                                 terminal=app.vscode_terminal())
     answer = _outcome(out)
     answer["command"] = out.command
     return answer

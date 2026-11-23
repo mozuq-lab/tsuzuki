@@ -361,6 +361,16 @@ class UiRenderTest(SafeMarkup, Ledger):
         self.assertNotIn('class="btn pri" data-action="resume"', html)
         self.assertNotIn("disabled", html)
 
+    def test_vscode_terminal_button(self):
+        # 拡張が入っているか、既定の再開にしているときだけ、VS Code で再開の次に出す
+        button = 'data-action="resume" data-how="vscode-terminal">VS Code のターミナルで再開</button>'
+        self.assertNotIn(button, frag_card(detail(), resume_default="vscode"))
+        html = frag_card(detail(), resume_default="vscode", vscode_terminal=True)
+        self.assertIn('<button class="btn" ' + button, html)
+        self.assertLess(html.index('data-how="vscode"'), html.index('data-how="vscode-terminal"'))
+        self.assertLess(html.index('data-how="vscode-terminal"'), html.index('data-how="terminal"'))
+        self.assertIn('<button class="btn pri" ' + button, frag_card(detail(), resume_default="vscode-terminal"))
+
     def test_resume_buttons(self):
         html = frag_card(detail(), resume_default="terminal")
         self.assertIn('<button class="btn" data-action="resume" data-how="vscode">VS Code で再開</button>', html)

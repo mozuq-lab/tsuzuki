@@ -17,7 +17,7 @@ DEFAULT_EXCLUDE_DIRS = [
 ]
 
 RETENTION_VALUES = ("all", "card", "none")
-RESUME_VALUES = ("vscode", "terminal", "copy")
+RESUME_VALUES = ("vscode", "vscode-terminal", "terminal", "copy")
 
 
 class ConfigError(Exception):
@@ -69,7 +69,7 @@ def _validate(cfg: Config) -> None:
     if cfg.retention not in RETENTION_VALUES:
         raise ConfigError("設定 retention は all・card・none のどれかにしてください: %r" % (cfg.retention,))
     if cfg.resume_default not in RESUME_VALUES:
-        raise ConfigError("設定 resume_default は vscode・terminal・copy のどれかにしてください: %r" % (cfg.resume_default,))
+        raise ConfigError("設定 resume_default は vscode・vscode-terminal・terminal・copy のどれかにしてください: %r" % (cfg.resume_default,))
     if not _is_int(cfg.port) or not 1 <= cfg.port <= 65535:
         raise ConfigError("設定 port は 1 から 65535 の整数にしてください: %r" % (cfg.port,))
     if cfg.max_age_days is not None and (not _is_int(cfg.max_age_days) or cfg.max_age_days <= 0):

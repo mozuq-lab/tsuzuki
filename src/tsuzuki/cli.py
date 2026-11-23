@@ -82,6 +82,13 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--all", action="store_true", help="完了も出す")
     tl.set_defaults(func=cmd_task_list)
     tk.set_defaults(func=cmd_task, task_parser=tk)
+    vs = sub.add_parser("vscode", help="VS Code のターミナルで再開するための拡張を扱う")
+    vsub = vs.add_subparsers(dest="vscode_cmd")
+    vi = vsub.add_parser("install", help="拡張 Tsuzuki Terminal を VS Code に入れる（入れ直しも同じ）")
+    vi.add_argument("--vsix", metavar="FILE", default=None,
+                    help="入れずに、VSIX のファイルを書き出すだけにする（手で入れるとき）")
+    vi.set_defaults(func=cmd_vscode_install)
+    vs.set_defaults(func=cmd_task, task_parser=vs)
     tp = sub.add_parser("templates", help="導入物の雛形（タスクの決まり・CLAUDE.md に足す数行・スキル2つ）を書き出す",
                         description="書き出すだけで、決まった場所には置かない。置く場所は書き出した後に出す")
     tp.add_argument("out", metavar="出力先", help="書き出すフォルダー（同じ名前のファイルがあれば何も書かない）")
@@ -175,6 +182,44 @@ def cmd_templates(args: argparse.Namespace) -> int:
     for path, (_, rel) in zip(written, TEMPLATES):
         print("書き出しました: %s → %s" % (path, placement(rel, tasks_root_display=tasks_display,
                                                           claude_dir_display=claude_display)))
+    return 0
+
+
+def cmd_vscode_install(args: argparse.Namespace) -> int:
+    """拡張を VSIX にまとめ、設定 vscode_app のアプリの code コマンドで入れる。台帳のディレクトリは作らない
+    （依頼の置き場所は、初めて依頼を書くときに作る）。"""
+    import subprocess
+    import tempfile
+    from tsuzuki.vscode_ext import EXTENSION_ID, build_vsix, code_cli, requests_dir
+    ledger = ledger_dir_from(args.ledger_dir, os.environ)
+    cfg = read_config(ledger)
+    requests = requests_dir(ledger.resolve())
+    if args.vsix:
+        out = build_vsix(Path(os.path.abspath(os.path.expanduser(args.vsix))), requests)
+        print("書き出しました: %s" % out)
+        print("VS Code のコマンドパレットの「Extensions: Install from VSIX...」で、このファイルを選んで入れてください")
+        return 0
+    code = code_cli(cfg.vscode_app, os.path.expanduser("~"))
+    if code is None:
+        print("tsuzuki: %s の、拡張を入れるコマンド（code など）が見つかりません。--vsix で書き出して、手で入れてください"
+              % cfg.vscode_app, file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory() as tmp:
+        vsix = build_vsix(Path(tmp) / "tsuzuki-terminal.vsix", requests)
+        try:
+            proc = subprocess.run([code, "--install-extension", str(vsix), "--force"], capture_output=True,
+                                  text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError) as e:
+            print("tsuzuki: 入れられませんでした: %s" % e, file=sys.stderr)
+            return 1
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        print("tsuzuki: 入れられませんでした（終了コード %s）%s" % (proc.returncode, "\n" + detail if detail else ""),
+              file=sys.stderr)
+        return 1
+    print("入れました: %s（%s）" % (EXTENSION_ID, cfg.vscode_app))
+    print("画面の状況カードに「VS Code のターミナルで再開」が出ます（tsuzuki serve を起動し直してから）。開いている窓で"
+          "反応しないときは、コマンドパレットの「Developer: Reload Window」で窓を読み込み直してください")
     return 0
 
 

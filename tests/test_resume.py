@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import shlex
 import shutil
@@ -15,6 +16,7 @@ from tsuzuki.resume import (ActionOutcome, applescript_quote, is_session_id, ope
                            resume_command, run_steps, terminal_steps, vscode_steps, conversation_prompt,
                            new_conversation_command, vscode_new_steps, terminal_new_steps, start_conversation)
 from tsuzuki.sources.live import LiveSession
+from tsuzuki.vscode_ext import EXTENSION_ID, NOT_INSTALLED, Editor, VSCodeTerminal
 from tests.fixtures import make_ledger
 
 SID = "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"
@@ -213,6 +215,79 @@ class ResumeTest(unittest.TestCase):
         code, _, err = self.cli_run("resume", GONE_SID[:8], "--terminal")
         self.assertEqual(code, 1)
         self.assertIn("記録は削除済みのため再開できません", err)
+
+
+class VSCodeTerminalTest(ResumeTest):
+    """VS Code の統合ターミナルで再開する（依頼を書いてから、窓を出して拡張の URI を開く）。"""
+
+    def make_terminal(self, with_extension=True):
+        home = Path(self.d) / "home"
+        if with_extension:
+            ext = home / ".vscode" / "extensions" / (EXTENSION_ID + "-0.1.0")
+            ext.mkdir(parents=True)
+            (ext / "package.json").write_text("{}")
+        return VSCodeTerminal(Path(self.d) / "requests", str(home), token=lambda n: "a" * 32,
+                              editor=Editor("Visual Studio Code"))
+
+    def test_resume_in_vscode_terminal(self):
+        terminal = self.make_terminal()
+        sleeps = []
+        out = resume(self.conn, SID, "vscode-terminal", cfg=self.cfg, live={}, confirm=False, runner=self.runner,
+                     sleep=sleeps.append, isdir=lambda p: True, terminal=terminal)
+        self.assertEqual((out.ok, out.message), (True, "VS Code のターミナルで開きました"))
+        self.assertEqual(self.calls, [["open", "-a", "Visual Studio Code", "/w"],
+                                      ["open", "vscode://tsuzuki-local.terminal/run?id=" + "a" * 32]])
+        self.assertEqual(sleeps, [1.5])
+        request = json.loads((terminal.requests / ("a" * 32 + ".json")).read_text(encoding="utf-8"))
+        self.assertEqual(request, {"cwd": "/w", "command": "claude --resume " + SID, "name": "Claude Code"})
+
+    def test_refuses_without_extension(self):
+        terminal = self.make_terminal(with_extension=False)
+        out = resume(self.conn, SID, "vscode-terminal", cfg=self.cfg, live={}, confirm=False, runner=self.runner,
+                     isdir=lambda p: True, terminal=terminal)
+        self.assertEqual((out.ok, out.message), (False, NOT_INSTALLED % "Visual Studio Code"))
+        out = resume(self.conn, SID, "vscode-terminal", cfg=self.cfg, live={}, confirm=False, runner=self.runner,
+                     isdir=lambda p: True)
+        self.assertFalse(out.ok)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(terminal.requests.exists())  # 依頼も書かない
+
+    def test_failed_open_discards_request(self):
+        # 開けなかった依頼は、拡張が受け取らないので消す
+        terminal = self.make_terminal()
+        out = resume(self.conn, SID, "vscode-terminal", cfg=self.cfg, live={}, confirm=False,
+                     runner=lambda args, **kw: Proc(1, stderr=b"Unable to find application\n"), sleep=lambda s: None,
+                     isdir=lambda p: True, terminal=terminal)
+        self.assertFalse(out.ok)
+        self.assertIn("Unable to find application", out.message)
+        self.assertEqual(list(terminal.requests.iterdir()), [])
+
+    def test_live_session_still_asks(self):
+        out = resume(self.conn, SID, "vscode-terminal", cfg=self.cfg, live={SID: LiveSession(1, SID, "/w", "idle")},
+                     confirm=False, runner=self.runner, isdir=lambda p: True, terminal=self.make_terminal())
+        self.assertTrue(out.needs_confirm)
+        self.assertEqual(self.calls, [])
+
+    def test_new_conversation_in_vscode_terminal(self):
+        task_dir = os.path.join(self.d, "tasks", "2026-11-20-a")
+        os.makedirs(task_dir)
+        self.conn.execute("INSERT INTO tasks (name, path, title, stage, repo_resolved) VALUES (?,?,?,?,?)",
+                          ("2026-11-20-a", task_dir, "a", "調査", None))
+        terminal = self.make_terminal()
+        out = start_conversation(self.conn, "2026-11-20-a", "vscode-terminal", cfg=self.cfg, runner=self.runner,
+                                 sleep=lambda s: None, terminal=terminal)
+        self.assertEqual((out.ok, out.message), (True, "VS Code のターミナルで新しい会話を始めました"))
+        request = json.loads((terminal.requests / ("a" * 32 + ".json")).read_text(encoding="utf-8"))
+        prompt = conversation_prompt(self.cfg.new_conversation_prompt, os.path.join(task_dir, "task.md"))
+        self.assertEqual(request["cwd"], task_dir)
+        self.assertEqual(request["command"], "claude " + shlex.quote(prompt))
+        self.assertEqual(self.calls[-1], ["open", "vscode://tsuzuki-local.terminal/run?id=" + "a" * 32])
+        # 依頼の雛形に改行があると、ターミナルに1行で送れないので断る
+        cfg = Config(new_conversation_prompt="@{task_md}\nを読んで")
+        out = start_conversation(self.conn, "2026-11-20-a", "vscode-terminal", cfg=cfg, runner=self.runner,
+                                 terminal=VSCodeTerminal(terminal.requests, terminal.home, token=lambda n: "b" * 32))
+        self.assertFalse(out.ok)
+        self.assertIn("改行", out.message)
 
 
 class NewConversationTest(unittest.TestCase):

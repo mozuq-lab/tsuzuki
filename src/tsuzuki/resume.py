@@ -12,6 +12,7 @@ from typing import Callable, Dict, List, Optional
 from tsuzuki.config import Config
 from tsuzuki.sources.live import LiveSession
 from tsuzuki.tasks import TASK_MD, at_reference
+from tsuzuki.vscode_ext import NOT_INSTALLED, VSCodeTerminal
 
 VSCODE_URI = "vscode://anthropic.claude-code/open?session={session_id}"
 VSCODE_PROMPT_URI = "vscode://anthropic.claude-code/open?prompt={prompt}"
@@ -27,12 +28,17 @@ def is_session_id(s: str) -> bool:
     return isinstance(s, str) and _SESSION_ID.fullmatch(s) is not None
 
 
-def resume_command(cwd: str, session_id: str) -> str:
-    """そのフォルダーでセッションを再開するコマンド。ID の形でなければ ValueError
-    （貼り付けて実行される文字列に、台帳の外から来た文字を混ぜないため）。"""
+def claude_resume(session_id: str) -> str:
+    """セッションを再開する claude のコマンド（フォルダーの移動を含まない）。ID の形でなければ ValueError
+    （実行される文字列に、台帳の外から来た文字を混ぜないため）。"""
     if not is_session_id(session_id):
         raise ValueError("セッションの ID の形ではありません: %r" % (session_id,))
-    return "cd " + shlex.quote(cwd) + " && claude --resume " + session_id
+    return "claude --resume " + session_id
+
+
+def resume_command(cwd: str, session_id: str) -> str:
+    """そのフォルダーでセッションを再開するコマンド。ID の形でなければ ValueError。"""
+    return "cd " + shlex.quote(cwd) + " && " + claude_resume(session_id)
 
 
 def _run(*args, **kwargs):
@@ -106,9 +112,29 @@ def _execute(steps: List[List[str]], ok_message: str, *, runner, sleep=time.slee
     return ActionOutcome(True, False, ok_message)
 
 
+def _in_vscode_terminal(terminal: Optional[VSCodeTerminal], cwd: str, command: str, ok_message: str, *, cfg: Config,
+                        runner, sleep) -> ActionOutcome:
+    """依頼を書いてから、そのフォルダーの窓を出して拡張の URI を開く（vscode_ext の説明）。"""
+    if terminal is None:
+        return ActionOutcome(False, False, "VS Code のターミナルでは開けません")
+    if not terminal.installed():
+        return ActionOutcome(False, False, NOT_INSTALLED % terminal.app)
+    try:
+        request_id = terminal.write(cwd, command)
+    except (OSError, ValueError) as e:
+        return ActionOutcome(False, False, "開けませんでした: 依頼を書けません（%s）" % e)
+    out = _execute(terminal.steps(cwd, request_id), ok_message, runner=runner, sleep=sleep,
+                   delay_ms=cfg.vscode_uri_delay_ms)
+    if not out.ok:
+        terminal.discard(request_id)
+    return out
+
+
 def resume(conn: sqlite3.Connection, session_id: str, how: str, *, cfg: Config, live: Dict[str, LiveSession],
-           confirm: bool, runner=_run, sleep=time.sleep, isdir=os.path.isdir) -> ActionOutcome:
-    if how not in ("vscode", "terminal"):
+           confirm: bool, runner=_run, sleep=time.sleep, isdir=os.path.isdir,
+           terminal: Optional[VSCodeTerminal] = None) -> ActionOutcome:
+    """how は vscode・vscode-terminal・terminal。vscode-terminal は terminal（依頼の書き先）が要る。"""
+    if how not in ("vscode", "vscode-terminal", "terminal"):
         return ActionOutcome(False, False, "再開の方法が正しくありません")
     row = conn.execute("SELECT cwd, transcript_exists FROM sessions WHERE id = ?", (session_id,)).fetchone() \
         if is_session_id(session_id) else None
@@ -124,6 +150,9 @@ def resume(conn: sqlite3.Connection, session_id: str, how: str, *, cfg: Config, 
     if how == "vscode":
         return _execute(vscode_steps(cwd, session_id, cfg.vscode_app), "VS Code で開きました", runner=runner,
                         sleep=sleep, delay_ms=cfg.vscode_uri_delay_ms)
+    if how == "vscode-terminal":
+        return _in_vscode_terminal(terminal, cwd, claude_resume(session_id), "VS Code のターミナルで開きました",
+                                   cfg=cfg, runner=runner, sleep=sleep)
     return _execute(terminal_steps(cwd, session_id), "Terminal で開きました", runner=runner, sleep=sleep)
 
 
@@ -169,8 +198,13 @@ def conversation_prompt(template: str, task_md: str) -> str:
     return _TASK_MD_MARK.sub(lambda m: at_reference(task_md) if m.group(0).startswith("@") else task_md, template)
 
 
+def claude_new(prompt: str) -> str:
+    """依頼を渡して新しい会話を始める claude のコマンド（フォルダーの移動を含まない）。"""
+    return "claude " + shlex.quote(prompt)
+
+
 def new_conversation_command(cwd: str, prompt: str) -> str:
-    return "cd " + shlex.quote(cwd) + " && claude " + shlex.quote(prompt)
+    return "cd " + shlex.quote(cwd) + " && " + claude_new(prompt)
 
 
 def vscode_new_steps(cwd: str, prompt: str, app: str) -> List[List[str]]:
@@ -187,8 +221,8 @@ def terminal_new_steps(cwd: str, prompt: str) -> List[List[str]]:
 
 
 def start_conversation(conn: sqlite3.Connection, task: str, how: str, *, cfg: Config, runner=_run,
-                       sleep=time.sleep, isdir=os.path.isdir) -> ActionOutcome:
-    if how not in ("vscode", "terminal", "copy"):
+                       sleep=time.sleep, isdir=os.path.isdir, terminal: Optional[VSCodeTerminal] = None) -> ActionOutcome:
+    if how not in ("vscode", "vscode-terminal", "terminal", "copy"):
         return ActionOutcome(False, False, "開き方が正しくありません")
     row = conn.execute("SELECT path, repo_resolved FROM tasks WHERE name = ?", (task,)).fetchone()
     if row is None:
@@ -203,4 +237,7 @@ def start_conversation(conn: sqlite3.Connection, task: str, how: str, *, cfg: Co
     if how == "vscode":
         return _execute(vscode_new_steps(cwd, prompt, cfg.vscode_app), "VS Code で新しい会話を開きました",
                         runner=runner, sleep=sleep, delay_ms=cfg.vscode_uri_delay_ms)
+    if how == "vscode-terminal":
+        return _in_vscode_terminal(terminal, cwd, claude_new(prompt), "VS Code のターミナルで新しい会話を始めました",
+                                   cfg=cfg, runner=runner, sleep=sleep)
     return _execute(terminal_new_steps(cwd, prompt), "Terminal で新しい会話を始めました", runner=runner)

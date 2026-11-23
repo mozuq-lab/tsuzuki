@@ -14,7 +14,7 @@ macOS 用で、画面と説明は日本語です。Anthropic の公式のツー�
 - 状況カードで、セッションの題名、場所、期間、直近の要約、最初と最後の依頼、資料、つながりを1枚で見る
 - 分岐、続きの会話、子セッションといった、セッション同士のつながりをたどる
 - セッションが作った・直した・読んだ文書（資料）を一覧し、Markdown と HTML はその場で読む
-- VS Code・Terminal・コマンドのコピーの3通りで再開する
+- VS Code（Claude Code の拡張のパネルか、統合ターミナル）・Terminal・コマンドのコピーで再開する
 - チケット1枚分の作業をタスクとしてまとめ、段階、結び付いた会話と資料を1枚のカードで見る
 
 「場所」は作業ディレクトリをまとめた単位で、たいていは Git のリポジトリの根です。「ヘッドレス」は `claude -p` などで起動した、人が対話しないセッションを指します。
@@ -23,7 +23,7 @@ Claude Code は既定では30日たった記録を消します（設定 `cleanup
 
 ## 読む物と書く物
 
-`~/.claude` は読むだけで、書き込みません。Tsuzuki が書くのは `~/.tsuzuki/` の中と、タスクの置き場所（`~/tasks`）の中の決まった所だけです。ほかに、`tsuzuki doctor --report` と `tsuzuki templates` が、指定された書き先に書きます。タスクの置き場所に書く物は「タスク」の節にあります。
+`~/.claude` は読むだけで、書き込みません。Tsuzuki が書くのは `~/.tsuzuki/` の中と、タスクの置き場所（`~/tasks`）の中の決まった所だけです。ほかに、`tsuzuki doctor --report` と `tsuzuki templates` が、指定された書き先に書きます。`tsuzuki vscode install` は、VS Code に拡張を1つ入れます（「VS Code のターミナルで再開する」）。タスクの置き場所に書く物は「タスク」の節にあります。
 
 | 読む物 | 何に使うか |
 |---|---|
@@ -44,6 +44,7 @@ Claude Code は既定では30日たった記録を消します（設定 `cleanup
 | `token` | 画面を開くための鍵（権限 0600） |
 | `lineage.jsonl` | フックが書く、親のセッションの記録。フックを入れたときだけできます |
 | `update.lock` | 台帳の更新を1つずつ行うための印 |
+| `vscode-requests/` | 「VS Code のターミナルで再開」の依頼（権限 0700 のフォルダーに、0600 のファイル）。拡張が読んだら消し、2分を過ぎた分は次の依頼のときに Tsuzuki が消します |
 
 台帳には会話の本文の写しが入ります。`~/.claude` と同じように扱ってください。置き場所は `--ledger-dir` か環境変数 `TSUZUKI_HOME` で変えられます。
 
@@ -85,7 +86,7 @@ export PATH="$HOME/.local/bin:$PATH"
 tsuzuki doctor
 ```
 
-Python、SQLite、検索の索引（FTS5 の trigram）、Claude Code の記録、`claude` コマンド、台帳のディレクトリ、フック、記録の形式を1行ずつ確かめ、✔（問題なし）・⚠（注意）・✘（使えない）で示します。✘ が1つでもあれば、終了コードは1になります。Python の版は、PATH で最初に見つかる `python3` のものです。Tsuzuki もその `python3` で動きます。
+Python、SQLite、検索の索引（FTS5 の trigram）、Claude Code の記録、`claude` コマンド、台帳のディレクトリ、フック、記録の形式、VS Code のターミナルの拡張を1行ずつ確かめ、✔（問題なし）・⚠（注意）・✘（使えない）で示します。✘ が1つでもあれば、終了コードは1になります。Python の版は、PATH で最初に見つかる `python3` のものです。Tsuzuki もその `python3` で動きます。
 
 初回は「台帳のディレクトリ」に「まだありません」の ⚠ が出ます。次の `tsuzuki serve` で作られるので、そのままで構いません。trigram が使えない Mac では「使えません。部分一致だけで検索します」と出ますが、検索はできます。
 
@@ -130,17 +131,34 @@ Markdown の資料の中の、言語が `mermaid` のコードブロックは、
 
 1〜2文字の語（「設計」など）は索引を使えないので、本文を端から読みます。資料が多いと、しばらく使っていなかった後の最初の検索に1〜2秒かかることがあります（「困ったとき」）。
 
-### 再開：VS Code・Terminal・コピーの3通り
+### 再開：VS Code・Terminal・コピー
 
 | ボタン | 中で行うこと |
 |---|---|
 | VS Code で再開 | `open -a "Visual Studio Code" <フォルダー>` でそのフォルダーの窓を出し、1.5秒待ってから `vscode://anthropic.claude-code/open?session=<ID>` を開きます。Claude Code の拡張機能のパネルで、そのセッションが再開されます |
+| VS Code のターミナルで再開 | 依頼を `~/.tsuzuki/vscode-requests/` に書き、そのフォルダーの窓を出して、1.5秒待ってから `vscode://tsuzuki-local.terminal/run?id=<依頼の ID>` を開きます。拡張 Tsuzuki Terminal が VS Code の統合ターミナルを開き、`claude --resume <ID>` を実行します。拡張を入れたときだけ出ます（下の「VS Code のターミナルで再開する」） |
 | Terminal で再開 | AppleScript で Terminal に `cd <フォルダー> && claude --resume <ID>` を実行させます。初回は macOS がオートメーションの許可を求めます |
 | コピー | `cd <フォルダー> && claude --resume <ID>` をクリップボードに入れます。VS Code の統合ターミナルなどに貼って実行します |
 
 先にフォルダーの窓を出すのは、別のフォルダーの窓が手前にあるまま URI を開くと、その窓で新しい会話が始まってしまうためです。うまくいかなければ「コピー」を使ってください。
 
 ⌘Enter と色の付いたボタンは、設定 `resume_default`（既定は `vscode`）の方法で再開します。
+
+#### VS Code のターミナルで再開する（任意）
+
+Claude Code の拡張機能は、URI から開くといつもパネルで開きます（設定 `claudeCode.useTerminal` は効きません）。統合ターミナルで再開したいときは、Tsuzuki に同梱した小さな拡張 Tsuzuki Terminal（`tsuzuki-local.terminal`）を入れます。
+
+```sh
+tsuzuki vscode install
+```
+
+設定 `vscode_app` のアプリ（「アプリケーション」フォルダーか `~/Applications` にあるもの）に入っているコマンドで入れます。Cursor など VS Code から派生したエディターで使うときは、`vscode_app` をそのアプリの名前（`"Cursor"` など）にしてから入れます。URI の種類（`vscode://`・`cursor://` など）と拡張の置き場所（`~/.vscode`・`~/.cursor` など）は、そのアプリの `product.json` から読みます。コマンドが見つからないときは、`tsuzuki vscode install --vsix ~/Desktop/tsuzuki-terminal.vsix` でファイルに書き出し、エディターのコマンドパレットの「Extensions: Install from VSIX...」で入れます。入れて `tsuzuki serve` を起動し直すと、状況カードの「VS Code で再開」の隣に「VS Code のターミナルで再開」が出ます。いつもこれで再開するなら、設定 `resume_default` を `"vscode-terminal"` にします。タスクのカードの「続きから」と「新しい会話」も、統合ターミナルで開くようになります。
+
+拡張は、ターミナルを開いてから、シェルの準備ができてコマンドが何も走っていない時間が1.5秒続くのを待って、`claude` を実行します（たいていは2秒ほど、長くても15秒ほど）。Python の拡張は新しいターミナルに `source <仮想環境>/bin/activate` を打ち込むので、すぐに送ると、それが起動した Claude の入力欄に入ってしまうためです。待つので、仮想環境を有効にしたシェルで `claude` が起動します。上限まで待ってもコマンドが走り続けているときは、それを止めずに、終わった後に実行されるよう `claude` を打ち込みます。
+
+初めてボタンを押したときは、VS Code が「拡張にこの URI を開かせてよいか」と確かめます。許可すると再開します。拡張は信頼していないフォルダーの窓（制限モード）でも動きます。そのフォルダーを信頼するかどうかは、起動した Claude Code が確かめます。
+
+統合ターミナルで起動した `claude` は、Claude Code の拡張機能とつながり、差分の表示などが使えます。拡張は台帳の置き場所を入れたときに覚えるので、`--ledger-dir` や `TSUZUKI_HOME` で置き場所を変えたら、入れ直します。
 
 今開いているセッションを再開しようとすると、「このセッションは今開いています。続けますか？」と確かめます。同じ記録に2つのプロセスが書き込むのを防ぐためです。記録が消えたセッションは再開できないので、ボタンは押せなくなっています。
 
@@ -170,6 +188,7 @@ Markdown の資料の中の、言語が `mermaid` のコードブロックは、
 | `tsuzuki purge --before YYYY-MM-DD` | その日より前に最後の動きがあったセッションを、台帳から消す |
 | `tsuzuki task new <短い名前> [--title 題] [--ticket 番号] [--repo パス]` | タスクのフォルダーと `task.md` を作る |
 | `tsuzuki task list [--all]` | タスクを一覧する。`--all` で完了も出す |
+| `tsuzuki vscode install [--vsix ファイル]` | VS Code のターミナルで再開する拡張を入れる（入れ直しも同じ）。`--vsix` を付けると、入れずにファイルに書き出す |
 | `tsuzuki templates <出力先>` | 導入物の雛形（決まり・CLAUDE.md に足す数行・スキル2つ）を書き出す |
 | `tsuzuki doctor [--report ファイル]` | 環境を点検する。`--report` を付けると診断ファイルも書く |
 | `tsuzuki hook session-start` | フックから呼ばれる。自分で実行するものではない |
@@ -190,7 +209,7 @@ Markdown の資料の中の、言語が `mermaid` のコードブロックは、
 | `retention` | `"all"` | 記録が消えたときに台帳に残す物。`"all"` はすべて、`"card"` は会話の本文を消してカードとつながりを残し、`"none"` は何も残しません |
 | `max_age_days` | `null` | 台帳に残す日数（正の整数）。最後の動きからこの日数を過ぎたセッションを、更新のたびに台帳から消します。`null` なら消しません |
 | `index_history` | `true` | 入力履歴を索引に入れるか。`false` にすると、入れてあった分も索引から外します |
-| `resume_default` | `"vscode"` | ⌘Enter と色の付いたボタンの再開の方法。`"vscode"`・`"terminal"`・`"copy"` のどれか |
+| `resume_default` | `"vscode"` | ⌘Enter と色の付いたボタンの再開の方法。`"vscode"`・`"vscode-terminal"`・`"terminal"`・`"copy"` のどれか。`"vscode-terminal"` は拡張 Tsuzuki Terminal が要ります |
 | `vscode_app` | `"Visual Studio Code"` | 再開や、資料・場所を開くときに使うアプリの名前 |
 | `vscode_uri_delay_ms` | `1500` | VS Code の窓を出してから URI を開くまでの待ち（ミリ秒） |
 | `display_strip_prefixes` | `[]` | 場所の表示名から外す接頭辞。`["/Users/YOUR_NAME/dev"]` なら `/Users/YOUR_NAME/dev/app` を `app` と表示します。`~` は使えないので絶対パスで書きます |
@@ -415,6 +434,7 @@ Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと 
 - 画面のスクリプトは同じサーバーからだけ読み、外部の配信元（CDN）は使いません（CSP `default-src 'self'`）。HTML の資料は sandbox を付けた枠に表示するので、資料の中のスクリプトは画面にもクッキーにも触れません。この枠では外部のスクリプト・画像などを自動では読み込みません（元の表示は「ブラウザで開く」で見られます）。ただし、資料の中のスクリプトは枠の中で動くので、枠の中のページを外のサイトへ移すこと（資料の文を URL に載せて送ることも含む）までは止められません
 - 外部へは通信しません。モデルを呼ばないので、トークンも消費しません。Claude の認証情報は読みません
 - 外部のコマンド（`open`、`osascript`、`ps`、`tsuzuki doctor` が使う `claude`）は、シェルを通さずに実行します
+- 拡張 Tsuzuki Terminal に渡す URI には、乱数の依頼の ID だけを載せます。実行するコマンドとフォルダーは、Tsuzuki が `~/.tsuzuki/vscode-requests/` に書いた依頼にだけあります。そのため、Web ページなどがこの URI を開いても、Tsuzuki が書いていない依頼は実行されません。拡張は依頼を読んだら消し、2分より古い依頼は使いません
 - 要求の記録（アクセスログ）は書きません。URL に検索の語が入るためです。要求の処理に失敗したときだけ、例外の種類とコードの位置を1行、標準エラーに書きます
 
 ## 台帳から消す
@@ -458,7 +478,13 @@ rm ~/.claude/projects/*/<ID>.jsonl
    rm ~/Library/LaunchAgents/local.tsuzuki.serve.plist
    ```
 
-3. 実行ファイルと台帳を消します。
+3. 拡張 Tsuzuki Terminal を入れていれば、外します。
+
+   ```sh
+   code --uninstall-extension tsuzuki-local.terminal
+   ```
+
+4. 実行ファイルと台帳を消します。
 
    ```sh
    rm ~/.local/bin/tsuzuki
@@ -517,6 +543,14 @@ Claude Code の更新で、記録の形式が変わったのかもしれませ�
 
 設定 `vscode_app` の名前のアプリが見つかりません。「アプリケーション」フォルダーで VS Code の名前（「.app」の前まで）を確かめ、`~/.tsuzuki/config.json` の `vscode_app` を直してから、`tsuzuki serve` を起動し直します。
 
+### 「VS Code のターミナルで再開」で何も起きない・「依頼が見つかりません」と出る
+
+拡張を入れる前から開いていた VS Code の窓では、拡張が動かないことがあります。コマンドパレットの「Developer: Reload Window」で窓を読み込み直します。VS Code に「依頼が見つかりません」「依頼の期限が切れています」と出るときは、拡張が覚えている台帳の置き場所と、Tsuzuki の台帳の置き場所が違うか、URI を開くまでに2分以上かかっています。`tsuzuki vscode install` で入れ直してから、もう一度ボタンを押します。台帳の置き場所が違うかどうかは、`tsuzuki doctor` の「VS Code のターミナルの拡張」でもわかります。
+
+### 「VS Code のターミナルで再開」で、Claude の入力欄に別の文字が入る
+
+ほかの拡張が、新しいターミナルに文字を打ち込んでいます（Python の拡張の `source …/activate` など）。Tsuzuki Terminal はそれが終わるのを待ちますが、シェルの準備に5秒より長くかかり、その後の打ち込みも遅れると、間に合わないことがあります。Python の拡張なら、設定 `python-envs.terminal.autoActivationType` を `"shellStartup"`（シェルの起動スクリプトで有効にする）か `"off"` にすると、打ち込まなくなります。
+
 ### 1〜2文字の語の検索が、しばらくぶりだと遅い
 
 1〜2文字の語（「設計」など）は索引で引けないので、会話と資料の本文を端から読みます。資料が多い（1万件を超えるなど）と、しばらく使っていなかった後の最初の検索に1〜2秒かかることがあります。続けて検索すれば速く返ります。3文字以上の語は索引で探すので、この遅さはありません。
@@ -531,7 +565,7 @@ Claude Code の更新で、記録の形式が変わったのかもしれませ�
 
 ### 「VS Code で再開」で新しい会話が始まってしまう
 
-「コピー」で写したコマンドを、そのフォルダーを開いた VS Code の統合ターミナルに貼って実行します。
+「VS Code のターミナルで再開」を使うか、「コピー」で写したコマンドを、そのフォルダーを開いた VS Code の統合ターミナルに貼って実行します。
 
 ## ライセンス
 

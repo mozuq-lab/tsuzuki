@@ -1,0 +1,28 @@
+{
+  "name": "terminal",
+  "displayName": "Tsuzuki Terminal",
+  "description": "Tsuzuki の画面から、VS Code の統合ターミナルで Claude Code のセッションを再開する",
+  "publisher": "tsuzuki-local",
+  "version": "0.1.2",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
+  "activationEvents": [
+    "onUri"
+  ],
+  "main": "./extension.js"
+}

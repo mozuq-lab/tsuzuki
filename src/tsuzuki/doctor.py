@@ -15,6 +15,7 @@ from tsuzuki.config import Config, ConfigError, resolve_tasks_root
 from tsuzuki.indexer import discover_transcripts
 from tsuzuki.sources.transcript import iter_lines, record_type
 from tsuzuki.store import LEDGER_FILENAME, get_meta, has_trigram, open_ledger
+from tsuzuki.vscode_ext import editor_for, installed_path, installed_requests_dir, requests_dir
 
 MIN_PYTHON = (3, 9)
 MIN_SQLITE = (3, 34, 0)  # trigram に必要
@@ -103,6 +104,25 @@ def _hook_check(claude_dir: Path, ledger_dir: Path, now) -> Check:
     return Check(name, "warn", "設定されていますが、最近の記録がありません")
 
 
+def vscode_terminal_check(cfg: Config, home: str, ledger_dir: Path) -> Check:
+    """VS Code のターミナルで再開する拡張（設定 vscode_app のアプリに入っているもの）。使わない人のために、
+    入っていなくても、既定の再開にしていなければ warn にしない。入っていれば、拡張が覚えている依頼の置き場所が
+    今の台帳のものと同じかを確かめる（台帳の場所を変えて入れ直していないと、依頼が見つからない）。"""
+    name = "VS Code のターミナルの拡張"
+    editor = editor_for(cfg.vscode_app, home)
+    if installed_path(editor, home) is not None:
+        remembered = installed_requests_dir(editor, home)
+        expected = os.path.realpath(str(requests_dir(ledger_dir)))
+        if remembered is None or os.path.realpath(remembered) != expected:
+            return Check(name, "warn", "拡張が覚えている台帳の場所（%s）が今の台帳と違います。tsuzuki vscode install "
+                                       "で入れ直してください" % (remembered or "不明",))
+        return Check(name, "ok", "入っています（%s）" % cfg.vscode_app)
+    if cfg.resume_default == "vscode-terminal":
+        return Check(name, "warn", "設定 resume_default が vscode-terminal ですが、入っていません"
+                                   "（tsuzuki vscode install で入れます）")
+    return Check(name, "ok", "未導入（任意）")
+
+
 def _format_check(ledger_dir: Path) -> Check:
     name = "記録の形式"
     path = ledger_dir / LEDGER_FILENAME
@@ -153,7 +173,9 @@ def run_checks(cfg: Config, *, ledger_dir: Path, claude_dir: Path, runner=subpro
             checks.append(Check("台帳のディレクトリ", "warn", "権限が %s です（0700 にしてください）" % oct(mode)))
     checks.append(_hook_check(claude_dir, ledger_dir, now))
     checks.append(_format_check(ledger_dir))
-    checks.extend(task_checks(cfg, claude_dir=claude_dir, home=home if home is not None else os.path.expanduser("~")))
+    home = home if home is not None else os.path.expanduser("~")
+    checks.append(vscode_terminal_check(cfg, home, ledger_dir))
+    checks.extend(task_checks(cfg, claude_dir=claude_dir, home=home))
     return checks
 
 

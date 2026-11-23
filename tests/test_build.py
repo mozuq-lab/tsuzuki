@@ -123,6 +123,18 @@ class BuildTest(unittest.TestCase):
                      "tsuzuki/templates/skills/task-start/SKILL.md", "tsuzuki/templates/skills/task-handoff/SKILL.md"):
             self.assertIn(name, names)
 
+    def test_zip_contains_vscode_extension(self):
+        out = build(ROOT / "src", self.root / "tsuzuki")
+        with zipfile.ZipFile(str(out)) as z:
+            names = z.namelist()
+        self.assertIn("tsuzuki/vscode/extension.js", names)
+        self.assertIn("tsuzuki/vscode/package.json", names)
+        vsix = self.root / "t.vsix"
+        p = self.run_app([out, "--ledger-dir", str(self.root / "ledger"), "vscode", "install", "--vsix", str(vsix)])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with zipfile.ZipFile(str(vsix)) as z:
+            self.assertIn("extension/extension.js", z.namelist())
+
     def test_zip_contains_mermaid(self):
         built = build(ROOT / "src", self.root / "tsuzuki")
         with zipfile.ZipFile(str(built)) as z:
