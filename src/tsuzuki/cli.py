@@ -61,8 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help='探す語（すべてを含むものを探す）。空白を含む語は、その並びのまま1語として探す')
     sr.set_defaults(func=cmd_search)
     sv = sub.add_parser("serve", help="画面のサーバーを起動する（Ctrl+C で終わる）")
-    sv.add_argument("--port", type=int, default=None, help="待ち受けるポート（既定 8765）")
+    sv.add_argument("--port", type=int, default=None, help="待ち受けるポート（既定 8765。0 なら空いている番号）")
     sv.add_argument("--no-open", action="store_true", help="ブラウザを開かない")
+    sv.add_argument("--exit-on-stdin-eof", action="store_true",
+                    help="標準入力が閉じたら終わる（アプリから起動するため）")
     sv.set_defaults(func=cmd_serve)
     hook = sub.add_parser("hook", help="Claude Code のフックから呼ばれる（親を記録する）")
     hook.add_argument("event", choices=["session-start"], help="フックの種類")
@@ -430,8 +432,8 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     from tsuzuki.server import serve
-    if args.port is not None and not 1 <= args.port <= 65535:
-        print("ポートは 1〜65535 で指定してください", file=sys.stderr)
+    if args.port is not None and not 0 <= args.port <= 65535:
+        print("ポートは 0〜65535 で指定してください", file=sys.stderr)
         return 2
     ledger = ledger_dir_from(args.ledger_dir, os.environ)
     cfg = load_config(ledger)
@@ -442,7 +444,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if tasks_root is None:
         return 1
     return serve(cfg, ledger_dir=ledger, claude_dir=claude_dir, home=home, port=port,
-                 open_browser=bool(cfg.open_browser) and not args.no_open, tasks_root=tasks_root)
+                 open_browser=bool(cfg.open_browser) and not args.no_open, tasks_root=tasks_root,
+                 exit_on_stdin_eof=args.exit_on_stdin_eof)
 
 
 def _search_text(words: List[str]) -> str:

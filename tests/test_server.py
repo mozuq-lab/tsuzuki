@@ -1577,12 +1577,19 @@ class ServeTest(ServerCase):
             self.assertEqual((fake_serve.call_args.kwargs["port"], fake_serve.call_args.kwargs["open_browser"]),
                              (9126, False))
             calls = fake_serve.call_count
-            for port in ("0", "65536", "-1"):
+            for port in ("65536", "-1"):
                 with self.subTest(port=port):
                     code, _, err = self.cli("serve", "--port", port)
                     self.assertEqual(code, 2)
-                    self.assertEqual(err.strip(), "ポートは 1〜65535 で指定してください")
+                    self.assertEqual(err.strip(), "ポートは 0〜65535 で指定してください")
             self.assertEqual(fake_serve.call_count, calls)
+            # CLI の --port は 0（空いている番号）を受け取る。--exit-on-stdin-eof は付けたときだけ真
+            code, _, _ = self.cli("serve", "--port", "0", "--no-open")
+            self.assertEqual(code, 0)
+            kw = fake_serve.call_args.kwargs
+            self.assertEqual((kw["port"], kw["exit_on_stdin_eof"]), (0, False))
+            self.cli("serve", "--port", "0", "--no-open", "--exit-on-stdin-eof")
+            self.assertIs(fake_serve.call_args.kwargs["exit_on_stdin_eof"], True)
 
     def test_serve_and_index_pass_the_tasks_root(self):
         # serve と index は、設定 tasks_root を解いた置き場所を必ず渡す
@@ -1618,6 +1625,49 @@ class ServeTest(ServerCase):
             serve(self.cfg, ledger_dir=self.ledger, claude_dir=self.fake.dir, home=self.home, port=0,
                   open_browser=False, tasks_root=tasks)
         self.assertEqual(spy.call_args.kwargs["tasks_root"], tasks)
+
+    def test_exit_on_stdin_eof_stops_the_server(self):
+        r, w = os.pipe()
+        result = []
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            th = threading.Thread(target=lambda: result.append(serve(
+                self.cfg, ledger_dir=self.ledger, claude_dir=self.fake.dir, home=self.home, port=0,
+                open_browser=False, exit_on_stdin_eof=True, stdin=os.fdopen(r, "rb"))), daemon=True)
+            th.start()
+            deadline = time.monotonic() + 10
+            m = None
+            while m is None and time.monotonic() < deadline:
+                m = re.search(r"tsuzuki: http://127\.0\.0\.1:(\d+)/", out.getvalue())
+                if m is None:
+                    time.sleep(0.05)
+            try:
+                self.assertIsNotNone(m, out.getvalue())
+                port = int(m.group(1))
+                socket.create_connection(("127.0.0.1", port), timeout=2).close()
+            finally:
+                os.close(w)
+            th.join(5)
+        self.assertFalse(th.is_alive())
+        self.assertEqual(result, [0])
+        with self.assertRaises(ConnectionRefusedError):
+            socket.create_connection(("127.0.0.1", port), timeout=2).close()
+
+    def test_port_zero_runs_beside_a_fixed_port(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            fixed = s.getsockname()[1]
+        httpd, app = make_server(self.cfg, ledger_dir=self.ledger, claude_dir=self.fake.dir, home=self.home, port=fixed,
+                                  start_indexer=False)
+        self.addCleanup(httpd.server_close)
+        out = io.StringIO()
+        with mock.patch.object(server._Server, "serve_forever", side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stdout(out):
+            code = serve(self.cfg, ledger_dir=self.ledger, claude_dir=self.fake.dir, home=self.home, port=0,
+                         open_browser=False)
+        self.assertEqual(code, 0)
+        got = int(re.search(r"tsuzuki: http://127\.0\.0\.1:(\d+)/", out.getvalue()).group(1))
+        self.assertNotEqual(got, fixed)
+        self.assertGreater(got, 0)
 
     def test_cli_reports_a_busy_ledger(self):
         # 台帳を開けない・書けない（使用中など）ときは、どのサブコマンドでも日本語の案内で終える（決めごと 17）

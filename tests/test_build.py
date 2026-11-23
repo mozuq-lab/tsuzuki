@@ -2,9 +2,11 @@
 import importlib.util
 import os
 import plistlib
+import signal
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -71,6 +73,54 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(files, ["__main__.py", "tsuzuki/__init__.py", "tsuzuki/cli.py"])
         p = self.run_app([out])
         self.assertEqual((p.returncode, p.stdout, p.stderr), (3, "main\n", ""))
+
+    def test_exit_on_stdin_eof_stops_when_the_writer_dies(self):
+        # 書き手（アプリ）が SIGKILL で落ちても、標準入力が閉じて子のサーバーが終わる
+        out = build(ROOT / "src", self.root / "tsuzuki")
+        fake = FakeClaude(self.root)
+        log_path = self.root / "serve.log"
+        writer = (
+            "import subprocess, sys, time\n"
+            "log = open(sys.argv[2], 'wb')\n"
+            "p = subprocess.Popen([sys.argv[1], '--claude-dir', sys.argv[3], 'serve', '--no-open', '--port', '0',\n"
+            "                      '--exit-on-stdin-eof'], stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT)\n"
+            "print(p.pid, flush=True)\n"
+            "time.sleep(600)\n")
+        parent = subprocess.Popen([sys.executable, "-c", writer, str(out), str(log_path), str(fake.dir)],
+                                  stdout=subprocess.PIPE, env=self.env(TSUZUKI_HOME=str(self.root / "ledger")),
+                                  cwd=str(self.root))
+        pids = []
+
+        def cleanup():
+            parent.kill()
+            parent.wait()
+            parent.stdout.close()
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        self.addCleanup(cleanup)
+        pid = int(parent.stdout.readline())
+        pids.append(pid)
+        deadline = time.monotonic() + START_SECONDS
+        while time.monotonic() < deadline:
+            if log_path.exists() and "tsuzuki: http://" in log_path.read_text(encoding="utf-8", errors="replace"):
+                break
+            time.sleep(0.05)
+        self.assertIn("tsuzuki: http://", log_path.read_text(encoding="utf-8", errors="replace"))
+        os.kill(parent.pid, signal.SIGKILL)
+        parent.wait()
+        gone = False
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                gone = True
+                break
+            time.sleep(0.1)
+        self.assertTrue(gone, "親が落ちても serve が残っている")
 
     def test_zipapp_runs_and_reads_assets(self):
         out = build(ROOT / "src", self.root / "tsuzuki")

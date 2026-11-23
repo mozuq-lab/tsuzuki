@@ -31,7 +31,7 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, BinaryIO, Callable, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, unquote
 
 from tsuzuki import taskviews, ui_render, ui_tasks, views
@@ -1131,10 +1131,24 @@ def make_server(cfg: Config, *, ledger_dir: Path, claude_dir: Path, home: str, p
     return httpd, httpd.app
 
 
+def _stop_on_eof(httpd: ThreadingHTTPServer, stdin: BinaryIO) -> None:
+    """stdin が閉じるまで読み捨て、閉じたら httpd を止めるスレッドを立てる。"""
+    def watch() -> None:
+        try:
+            while stdin.read(4096):
+                pass
+        except (OSError, ValueError):
+            pass
+        httpd.shutdown()
+    threading.Thread(target=watch, name="stdin-eof", daemon=True).start()
+
+
 def serve(cfg: Config, *, ledger_dir: Path, claude_dir: Path, home: str, port: int, open_browser: bool,
-          tasks_root: Optional[Path] = None) -> int:
+          tasks_root: Optional[Path] = None, exit_on_stdin_eof: bool = False,
+          stdin: Optional[BinaryIO] = None) -> int:
     """サーバーを起動し、鍵の付いた URL を出して、Ctrl+C まで動く。ポートが使われていれば 2 を返す
-    （ブックマークした URL が変わらないよう、別の番号は選ばない）。"""
+    （ブックマークした URL が変わらないよう、別の番号は選ばない）。port 0 なら空いている番号を使う。
+    exit_on_stdin_eof なら、標準入力が閉じたら（アプリが終わった・落ちた）止まる。"""
     try:
         httpd, app = make_server(cfg, ledger_dir=ledger_dir, claude_dir=claude_dir, home=home, port=port,
                                  tasks_root=tasks_root)
@@ -1147,6 +1161,8 @@ def serve(cfg: Config, *, ledger_dir: Path, claude_dir: Path, home: str, port: i
     url = "http://%s:%d/?key=%s" % (HOST, app.port, app.token)
     print("tsuzuki: " + url, flush=True)
     try:
+        if exit_on_stdin_eof:
+            _stop_on_eof(httpd, stdin if stdin is not None else sys.stdin.buffer)
         if open_browser:
             webbrowser.open(url)
         httpd.serve_forever()

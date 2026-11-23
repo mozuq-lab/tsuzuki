@@ -34,6 +34,7 @@ const MERMAID_MAX_ERROR = 300; // 出す失敗の文の上限（字）
 
 // 表示の切り替え（自動 → ライト → ダーク → 自動）。自動のときは data-theme を付けず、localStorage のキーも持たない。
 // localStorage が使えなくても（読み書きは try の中）、自動のまま動く
+// アプリ（Tsuzuki.app）は起動のたびにポートが変わり localStorage が引き継がれないので、選んだ値をアプリにも送る
 const THEME_KEY = "tsuzuki-theme";
 const THEME_TEXT = { "": "表示：自動", light: "表示：ライト", dark: "表示：ダーク" };
 const THEME_NEXT = { "": "light", light: "dark", dark: "" };
@@ -74,6 +75,11 @@ function cycleTheme() {
     else localStorage.removeItem(THEME_KEY);
   } catch (error) {
     // 保存できなくても、この画面の間は切り替わる
+  }
+  try {
+    window.webkit.messageHandlers.tsuzukiTheme.postMessage(themeChoice);
+  } catch (error) {
+    /* ブラウザでは何もしない（アプリのときだけ、選んだ表示をアプリに覚えさせる） */
   }
   applyTheme();
 }

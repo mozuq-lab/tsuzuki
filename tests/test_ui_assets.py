@@ -516,6 +516,13 @@ class SmallFixesAssetsTest(unittest.TestCase):
             self.assertIn(word, js)
         self.assertRegex(js, r"try\s*\{[^}]*localStorage")
 
+    def test_theme_choice_is_sent_to_the_app(self):
+        # 表示を切り替えるたびアプリへ送る。ブラウザ（window.webkit がない）では try の中で何もしない
+        body = _function(_asset("app.js"), "cycleTheme")
+        call = "window.webkit.messageHandlers.tsuzukiTheme.postMessage(themeChoice)"
+        self.assertIn(call, body)
+        self.assertRegex(body, r"try\s*\{\s*" + re.escape(call) + r";\s*\}\s*catch")
+
     def test_card_header_wraps_outside_the_narrow_media_query(self):
         # 見出しの折り返しは窓の幅でなく見出しの幅で決める。規則はメディアクエリの外にある
         css = _asset("app.css")

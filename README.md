@@ -78,6 +78,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 新しい版に置き換えるときは、先に `tsuzuki serve` を止めてから、上と同じコマンドで置き換えます。動かしたまま置き換えると、起動し直すまで画面には「内部のエラーが起きました」としか出なくなります。
 
+アプリも使っているなら、アプリも同時に置き換えます。先にアプリを終了（⌘Q）してから、下の「アプリとして使う（任意）」の手順をもう一度行います。台帳の形が変わる版では、古い方が台帳を開けなくなるためです。
+
 新しい版で台帳の形が変わったときは、置き換えた後の最初の更新で、取り込み済みの記録を新しい読み方で読み直します。そのときだけ初回と同じくらいの時間がかかります。記録がもう消えたセッションは、読み直さずにそのまま残します。
 
 ### 3. `tsuzuki doctor` で点検する
@@ -101,6 +103,49 @@ tsuzuki serve
 起動している間は、30秒ごとに新しい記録を取り込みます（設定 `refresh_seconds`）。すぐに取り込みたいときは、画面の「更新」を押します。ブラウザを開かずに起動するなら `tsuzuki serve --no-open`、ポートを変えるなら `tsuzuki serve --port 8766` とします。
 
 鍵は `~/.tsuzuki/token` に保存され、起動し直しても変わりません。表示された URL をブックマークしておけば、次からはそこから開けます。
+
+## アプリとして使う（任意）
+
+Terminal で `tsuzuki serve` を動かす代わりに、`Tsuzuki.app` を開いて使えます。自分の Mac でビルドして使う前提です。ほかの Mac へ持っていく使い方は想定していません。
+
+1. リポジトリのフォルダーでビルドします。`dist/Tsuzuki.app` ができます。`swiftc`（Xcode か Command Line Tools）が要ります。ないときは、何が要るかを表示して終わります。その場合は `xcode-select --install` で入れてください。
+
+   ```sh
+   python3 scripts/build_app.py
+   ```
+
+   終わると「作りました: <場所>（署名: <名前>）」と出ます。
+
+2. `~/Applications` に置きます。管理者の権限は要りません。
+
+   ```sh
+   mkdir -p ~/Applications && rm -rf ~/Applications/Tsuzuki.app && cp -R dist/Tsuzuki.app ~/Applications/
+   ```
+
+新しい版に置き換えるときは、先にアプリを終了（⌘Q）してから、上の手順 2 を行います。アプリの中の `tsuzuki` は必要になるたびに読み込まれるので、開いたまま置き換えると、画面に「内部のエラーが起きました」としか出なくなります。
+
+開くと、アプリが `/usr/bin/python3` で `tsuzuki serve` を空いているポートに起動し、画面を自分のウィンドウに出します。ウィンドウを閉じるか ⌘Q を押すとアプリが終わり、サーバーも止まります。アプリが落ちたときも、サーバーは止まります。閉じている間は台帳を更新しません。次に開いたときに追いつきます。
+
+サーバーを起動できなかったり、途中で止まったりしたときは、ウィンドウに「起動できませんでした」と理由が出ます。「もう一度」を押すと起動し直します。`/usr/bin/python3` がないときは、`xcode-select --install` を実行するよう案内が出ます。
+
+「Terminal で再開」を初めて使うと、macOS が「Tsuzuki.app が Terminal を操作しようとしています」と確認します。許可すると使えます。許可が続くかどうかは、ビルドの署名で決まります。
+
+署名には、次の順で見つかった証明書を使います。どれで署名したかは、ビルドの最後に「署名: …」と表示されます。
+
+1. 環境変数 `TSUZUKI_CODESIGN_IDENTITY` で指定した証明書
+2. 指定がなければ、キーチェーンの最初の「Apple Development」の証明書
+3. どちらもなければ ad-hoc 署名
+
+証明書で署名したときは、許可を聞かれるのは最初の1回だけです。ad-hoc 署名のときは、ビルドし直すたびに聞き直されます。
+
+手元でビルドしたアプリには、ダウンロードの印（quarantine）が付かないので、Gatekeeper の確認は出ません。
+
+ほかのことは次のとおりです。
+
+- 台帳は `~/.tsuzuki`、記録は `~/.claude` を使います。アプリは `TSUZUKI_HOME`・`CLAUDE_CONFIG_DIR`・`TSUZUKI_PORT` を読みません。
+- 表示の切り替え（自動・ライト・ダーク）と、ウィンドウの大きさ・位置は、アプリが覚えます。
+- 資料の中にある外のページへのリンクは、押したときだけ、いつものブラウザで開きます。
+- 手で起動した `tsuzuki serve` や、ログイン時の起動と同時に動かしても構いません。ポートは別になります。アプリを使うなら、ログイン時の起動は要りません。止めてもかまいません。
 
 ## 使い方
 
@@ -180,7 +225,7 @@ tsuzuki vscode install
 
 | コマンド | すること |
 |---|---|
-| `tsuzuki serve [--port 番号] [--no-open]` | 画面のサーバーを起動する（Ctrl+C で終わる） |
+| `tsuzuki serve [--port 番号] [--no-open] [--exit-on-stdin-eof]` | 画面のサーバーを起動する（Ctrl+C で終わる）。`--port 0` なら空いているポートを使う。`--exit-on-stdin-eof` を付けると、標準入力が閉じたときに終わる（アプリが使う） |
 | `tsuzuki index [--full]` | 台帳を更新する。`--full` を付けると作り直す。作り直すと、記録がもう消えたセッション（Claude Code が古い記録を片づけた分など）は台帳からも消え、戻せない |
 | `tsuzuki search [--days 日数] [--role user\|assistant] [--order recent\|count] 語 …` | 会話・資料・入力履歴を検索する。`--days` で期間を、`--role` で会話の発言者（user は本人、assistant は Claude）を絞り、`--order count` で一致したターンの多い順に並べる。オプションは語の前に置く |
 | `tsuzuki resume [--terminal] <ID>` | 再開のコマンドを出す。`--terminal` を付けると Terminal で開く |
@@ -478,13 +523,21 @@ rm ~/.claude/projects/*/<ID>.jsonl
    rm ~/Library/LaunchAgents/local.tsuzuki.serve.plist
    ```
 
-3. 拡張 Tsuzuki Terminal を入れていれば、外します。
+3. アプリを使っていれば、⌘Q で終了してから消します。覚えていた表示の設定と、WebKit が残したデータも消します。アプリを一度も開いていなければ設定がないので、`defaults delete` のエラーは出さずに捨てます。
+
+   ```sh
+   rm -rf ~/Applications/Tsuzuki.app
+   defaults delete local.tsuzuki.app 2>/dev/null
+   rm -rf ~/Library/WebKit/local.tsuzuki.app ~/Library/Caches/local.tsuzuki.app ~/Library/HTTPStorages/local.tsuzuki.app
+   ```
+
+4. 拡張 Tsuzuki Terminal を入れていれば、外します。
 
    ```sh
    code --uninstall-extension tsuzuki-local.terminal
    ```
 
-4. 実行ファイルと台帳を消します。
+5. 実行ファイルと台帳を消します。
 
    ```sh
    rm ~/.local/bin/tsuzuki
