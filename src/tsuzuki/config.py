@@ -1,6 +1,7 @@
 """設定ファイル（config.json）の読み書きと、設定値の優先順位の解決。"""
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -160,18 +161,19 @@ def write_ticket_url(ledger: Path, value: Optional[str]) -> None:
         data, mode = _to_dict(Config()), 0o600
     data["ticket_url"] = value
     _validate(_from_dict(dict(data)))
-    tmp = ledger / "config.json.tmp"
+    tmp = None  # type: Optional[str]
     try:
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        fd, tmp = tempfile.mkstemp(dir=str(ledger), prefix=".config-", suffix=".tmp")  # 名前は毎回新しく、リンクはたどらない
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-        os.chmod(str(tmp), mode)
-        os.replace(str(tmp), str(path))
+        os.chmod(tmp, mode)
+        os.replace(tmp, str(path))
     except OSError as e:
-        try:
-            os.unlink(str(tmp))
-        except OSError:
-            pass
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         raise ConfigError("config.json に書けません: %s" % e)
 
 

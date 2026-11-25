@@ -255,6 +255,31 @@ class SettingsTest(_TmpCase):
             self.assertEqual(md.read_bytes(), before)
         self.assertIsNone(normalize_workspace("  ", home=str(self.base)))
 
+    def test_untouched_save_with_unnormalized_values_writes_nothing(self):
+        text = (TEMPLATE.replace("title: ログインの期限", "title: ログインの  期限").replace("repo:", "workspace: ~/w/a.code-workspace\nrepo:"))
+        md = self.task_md(text)
+        before = md.stat().st_mtime_ns
+        self.assertFalse(self.update(md, title="ログインの 期限", workspace="~/w/a.code-workspace"))
+        self.assertFalse(self.update(md, title="ログインの 期限", workspace=str(self.ws)))
+        self.assertEqual(md.stat().st_mtime_ns, before)
+        self.assertEqual(md.read_text(encoding="utf-8"), text)
+
+    def test_untouched_save_without_a_title_line_writes_nothing(self):
+        text = TEMPLATE.replace("title: ログインの期限\n", "")
+        md = self.task_md(text)
+        self.assertFalse(self.update(md))
+        self.assertEqual(md.read_text(encoding="utf-8"), text)
+
+    def test_deleted_workspace_does_not_block_other_fields(self):
+        text = TEMPLATE.replace("repo:", "workspace: %s\nrepo:" % self.ws)
+        md = self.task_md(text)
+        self.ws.unlink()
+        self.assertTrue(self.update(md, ticket="#999", workspace=str(self.ws)))
+        out = md.read_text(encoding="utf-8")
+        self.assertIn('ticket: "#999"\n', out)
+        self.assertIn("workspace: %s\n" % self.ws, out)
+        self.assertEqual(out, text.replace('ticket: "#123"', 'ticket: "#999"'))
+
     def test_settings_refuse_a_stale_form(self):
         md = self.task_md()
         st = md.stat()
@@ -462,6 +487,19 @@ class CopyTest(_TmpCase):
         os.symlink(str(target), str(self.folder / "README.md"))
         self.assertEqual(self.copy(), str(self.folder / "README-2.md"))
         self.assertEqual(target.read_text(encoding="utf-8"), "守る\n")
+
+    def test_copy_is_named_after_the_path_as_given(self):
+        link = self.outside / "alias.md"
+        os.symlink(str(self.src), str(link))
+        dest = self.copy(link)
+        self.assertEqual(dest, str(self.folder / "alias.md"))
+        self.assertEqual((self.folder / "alias.md").read_text(encoding="utf-8"), "元の中身\n")
+
+    def test_copy_refuses_an_underscore_folder(self):
+        (self.root / "_x").mkdir()
+        with self.assertRaises(TaskWriteError) as cm:
+            self.copy(task_dir=self.root / "_x")
+        self.assertEqual(str(cm.exception), NOT_A_COPY_TARGET % (self.root / "_x"))
 
     def test_copy_without_extension(self):
         src = self.outside / "Makefile"

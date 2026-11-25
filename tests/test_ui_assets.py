@@ -123,6 +123,14 @@ class UiAssetsTest(unittest.TestCase):
         for part in ("askToContinue(button.dataset.confirm", "/api/task-trash", "busyWriting()"):
             self.assertIn(part, body)
 
+    def test_trash_goes_to_the_tasks_view(self):
+        body = _function(_asset("app.js"), "trashTask")
+        self.assertIn('go({ v: "tasks", task: "", d: "", q: "", s: "", c: "", t: "", i: "" }, false)', body)
+
+    def test_untouched_waiting_reason_is_not_sent(self):
+        body = _function(_asset("app.js"), "onSubmit")
+        self.assertIn("if (reason.value !== reason.defaultValue) body.reason = reason.value;", body)
+
     def test_script_avoids_dialogs_and_eval(self):
         js = pkgutil.get_data("tsuzuki", "ui/app.js").decode()
         for bad in ("eval(", "alert(", "confirm(", "prompt(", "new Function"):
@@ -421,7 +429,7 @@ class TaskViewAssetsTest(unittest.TestCase):
                       '{ stage: button.dataset.stage }),', js)
         self.assertIn('"task-waiting": (button) => openWaitingForm(button)', js)
         submit = _function(js, "onSubmit")
-        for part in ('"waiting-form"', '"/api/task-waiting"', "reason:"):
+        for part in ('"waiting-form"', '"/api/task-waiting"', "body.reason"):
             self.assertIn(part, submit)
         self.assertIn('"form-cancel": (button) => cancelForm(button)', js)
         self.assertIn('"task-settings": (button) => openSettings(button)', js)

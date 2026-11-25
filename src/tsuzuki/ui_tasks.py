@@ -4,7 +4,8 @@ ui_render と同じく、台帳と task.md から来た文字はすべてここ�
 スクリプトと style 属性は出さない。画面のコピーの @ の形もここで作る（tasks.at_reference。画面の JavaScript は
 組み立てない）。画面の JavaScript とは data-* 属性で約束する：一覧の行の data-task、カードの data-task・
 data-mtime・data-size、操作のボタンの data-action（前からある resume・copy・open-doc・docs・card に、
-task-stage・task-waiting・task-conversation・task-unlink・copy-picked・new-task を足す）、選ぶ欄の data-copy。
+task-stage・task-waiting・task-conversation・task-unlink・copy-picked・new-task・task-open・task-link・
+task-settings・task-trash・task-copy-doc・ticket-url-edit・form-cancel を足す）、選ぶ欄の data-copy。
 """
 import os
 import re
@@ -129,7 +130,8 @@ def _line2(r: TaskRow) -> str:
 def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = None,
                    resume_command: Optional[str] = None) -> str:
     """タスクのカード：題と4つのボタン、段階と待ち、現在地と次の一手、待っていること・
-    決めたこと・チケット・ブランチと PR、会話、資料（3つの束）、ゴミ箱、注意。data-mtime は task.md の更新時刻を
+    決めたこと・チケット・ブランチと PR、会話、資料（3つの束）、一番下の「設定を変える」と「ゴミ箱に入れる」、
+    注意の順。data-mtime は task.md の更新時刻を
     そのままの精度で（repr）持ち、段階と待ちの操作がそれを送り返す。resume_command は、既定の再開がコピーの
     ときに「続きから」がコピーする再開のコマンド（サーバーが台帳から作る）。home の下のパスは ~ で出す。"""
     row = d.row

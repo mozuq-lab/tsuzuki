@@ -136,8 +136,10 @@ def _in_vscode_terminal(terminal: Optional[VSCodeTerminal], cwd: str, command: s
 
 
 def _missing_workspace(workspace: Optional[str]) -> Optional[ActionOutcome]:
-    """ワークスペースが普通のファイルでなければ、何も開かずに断る答え。"""
-    if workspace is not None and not os.path.isfile(workspace):
+    """ワークスペースが絶対パスの .code-workspace の普通のファイルでなければ、何も開かずに断る答え
+    （task.md に手で書かれた値が open の引数に届かないようにする）。"""
+    if workspace is not None and not (os.path.isabs(workspace) and workspace.endswith(".code-workspace")
+                                      and os.path.isfile(workspace)):
         return ActionOutcome(False, False, NO_WORKSPACE % workspace)
     return None
 

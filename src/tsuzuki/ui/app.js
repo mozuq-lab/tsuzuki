@@ -1192,7 +1192,7 @@ function trashTask(button) {
     toast(answer.message);
     if (!answer.ok) return;
     panes.list.url = panes.left.url = null; // 同じ URL でも取り直す
-    go({ task: "" }, false);
+    go({ v: "tasks", task: "", d: "", q: "", s: "", c: "", t: "", i: "" }, false); // 資料や検索の画面からでも一覧へ
   });
 }
 
@@ -1211,7 +1211,10 @@ function onSubmit(event) {
     createTask(form);
   } else if (form.classList.contains("waiting-form")) {
     event.preventDefault();
-    writeTask("/api/task-waiting", form, { waiting: form.dataset.waiting === "true", reason: form.elements.reason.value });
+    const reason = form.elements.reason;
+    const body = { waiting: form.dataset.waiting === "true" };
+    if (reason.value !== reason.defaultValue) body.reason = reason.value; // 触っていなければ欄はそのまま
+    writeTask("/api/task-waiting", form, body);
   } else if (form.id === "task-settings") {
     event.preventDefault();
     saveSettings(form);

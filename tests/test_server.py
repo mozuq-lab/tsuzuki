@@ -1245,6 +1245,17 @@ class TaskServerTest(ServerCase):
 
     # 操作
 
+    def test_task_waiting_without_a_reason_keeps_a_section_with_headings_and_fences(self):
+        section = "### 山田さん\n- API\n```sh\nmake\n```\n"
+        text = (TASK_MD % self.proj).replace("waiting: false", "waiting: true") + "\n## 待っていること\n" + section
+        write_file(self.task_md, text)
+        self.reindex(tasks_root=Path(self.tasks_root))
+        stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
+        r = self.action("/api/task-waiting", {"task": "2026-11-20-a", "waiting": False, "mtime": stamp[0],
+                                              "size": stamp[1]})
+        self.assertTrue(r.json()["ok"], r.json())
+        self.assertEqual(self.text(), text.replace("waiting: true", "waiting: false"))
+
     def test_task_waiting_with_a_reason(self):
         stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
         r = self.action("/api/task-waiting", {"task": "2026-11-20-a", "waiting": True, "reason": "#45 のレビュー",

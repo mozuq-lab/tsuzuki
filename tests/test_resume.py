@@ -386,6 +386,18 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertFalse(self.requests.exists())
 
+    def test_misshapen_workspace_opens_nothing(self):
+        plain = os.path.join(self.d, "plain.txt")
+        Path(plain).write_text("{}", encoding="utf-8")
+        terminal = self.terminal()
+        for bad in (plain, "w/x.code-workspace", "~/x.code-workspace"):
+            for how in ("vscode", "vscode-terminal"):
+                out = self.resume(how, bad, terminal)
+                self.assertEqual((out.ok, out.message), (False, NO_WORKSPACE % bad))
+                out = self.start(how, bad, terminal)
+                self.assertEqual((out.ok, out.message), (False, NO_WORKSPACE % bad))
+        self.assertEqual(self.calls, [])
+
     def test_workspace_without_folders(self):
         Path(self.ws).write_text("{}", encoding="utf-8")
         out = self.start("vscode-terminal", self.ws, self.terminal())

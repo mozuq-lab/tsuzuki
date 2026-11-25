@@ -49,6 +49,18 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual((data["port"], data["extra"]), (9000, 1))
             self.assertEqual(sorted(os.listdir(d)), ["config.json"])
 
+    def test_write_ticket_url_does_not_follow_a_symlink_at_the_old_temp_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            victim = Path(d) / "victim.txt"
+            victim.write_text("守る\n", encoding="utf-8")
+            ledger = Path(d) / "ledger"
+            ledger.mkdir()
+            os.symlink(str(victim), str(ledger / "config.json.tmp"))
+            write_ticket_url(ledger, "https://r.example.com/issues/{n}")
+            self.assertEqual(victim.read_text(encoding="utf-8"), "守る\n")
+            self.assertEqual(read_config(ledger).ticket_url, "https://r.example.com/issues/{n}")
+            self.assertEqual(stat.S_IMODE(os.stat(str(ledger / "config.json")).st_mode), 0o600)
+
     def test_write_ticket_url_creates_a_private_file_when_missing(self):
         with tempfile.TemporaryDirectory() as d:
             write_ticket_url(Path(d), "https://r.example.com/issues/{n}")

@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from tsuzuki.tasks import _FENCE, _H1, _H2, SHARED_DIR, STAGES, TASK_MD, parse_task_md, task_title
+from tsuzuki.tasks import _FENCE, _H1, _H2, STAGES, TASK_MD, is_task_dir_name, parse_task_md, task_title
 from tsuzuki.workspace import WorkspaceError, first_folder
 
 CHANGED = "task.md が変わりました。読み直してください"
@@ -57,6 +57,11 @@ def normalize_ticket(ticket: Optional[str]) -> Optional[str]:
     if not ticket:
         return None
     return "#" + ticket if re.fullmatch(r"[0-9]+", ticket) else ticket
+
+
+def _quoteless(ticket: Optional[str]) -> Optional[str]:
+    """チケットの値から " を除く（task.md に引用符で包んで書くため）。"""
+    return ticket.replace('"', "") if ticket else ticket
 
 
 def _one_line(value: str) -> str:
@@ -124,11 +129,11 @@ def _check_inside(task_md: Path, tasks_root: Path) -> str:
 
 def _check_task_folder(task_dir: str, tasks_root: Path, message: str) -> str:
     """task_dir の実体（シンボリックリンクを解いた先）が置き場所の直下のタスクのフォルダー（shared と
-    . で始まる名前を除く）であることを確かめ、その実体を返す。違えば message % task_dir で断る。"""
+    . や _ で始まる名前を除く）であることを確かめ、その実体を返す。違えば message % task_dir で断る。"""
     real = os.path.realpath(task_dir)
     name = os.path.basename(real)
     if (os.path.dirname(real) != os.path.realpath(str(tasks_root)) or not os.path.isdir(real)
-            or name == SHARED_DIR or name.startswith(".")):
+            or not is_task_dir_name(name)):
         raise TaskWriteError(message % task_dir)
     return real
 
@@ -144,7 +149,7 @@ def copy_into_task(task_dir: str, tasks_root: Path, source: str, *, claude_dir: 
         raise TaskWriteError(NOT_A_FILE % source)
     if os.path.dirname(src) == real or src.startswith(real + "/"):
         raise TaskWriteError(ALREADY_IN_TASK)
-    stem, ext = os.path.splitext(os.path.basename(src))
+    stem, ext = os.path.splitext(os.path.basename(source))  # 名前は渡されたパスのまま（コピー済みの目印と合わせる）
     for n in range(1, MAX_COPY_NAMES + 1):
         dest = os.path.join(real, stem + ext if n == 1 else "%s-%d%s" % (stem, n, ext))
         try:
@@ -235,6 +240,12 @@ def set_waiting(task_md: Path, tasks_root: Path, *, waiting: bool, reason: Optio
     _edit(task_md, tasks_root, transform, expect_mtime=expect_mtime, expect_size=expect_size, claude_dir=claude_dir)
 
 
+def _expand_home(value: str, home: str) -> str:
+    """先頭の ~ を home で展開する（手で書かれた ~/… を絶対パスと比べるため）。"""
+    value = value.strip()
+    return home.rstrip("/") + value[1:] if value == "~" or value.startswith("~/") else value
+
+
 def normalize_workspace(value: str, *, home: str) -> Optional[str]:
     """ワークスペースのパス。空なら None。~ は home で展開し、絶対パスの .code-workspace で、普通のファイルで、
     最初のフォルダーがあるものだけを、normpath した絶対パスで返す。それ以外は TaskWriteError。"""
@@ -271,11 +282,8 @@ def update_settings(task_md: Path, tasks_root: Path, *, title: str, ticket: str,
     new_title = _one_line(title)
     if not new_title:
         raise TaskWriteError("題を入れてください")
-    new_ticket = normalize_ticket(ticket)
-    if new_ticket:
-        new_ticket = new_ticket.replace('"', "")
+    new_ticket = _quoteless(normalize_ticket(ticket))
     new_repo = _one_line(repo)
-    new_workspace = normalize_workspace(workspace, home=home)
     folder = task_md.parent.name
 
     class _Unchanged(Exception):
@@ -284,14 +292,17 @@ def update_settings(task_md: Path, tasks_root: Path, *, title: str, ticket: str,
     def transform(text: str) -> str:
         tf = parse_task_md(text)
         changes = {}  # type: Dict[str, str]
-        if new_title != (tf.title or ""):
+        if new_title != _one_line(task_title(tf, folder)):
             changes["title"] = new_title
-        if new_ticket != tf.ticket:
+        if new_ticket != _quoteless(normalize_ticket(tf.ticket)):
             changes["ticket"] = '"%s"' % new_ticket if new_ticket else ""
-        if new_repo != (tf.repo or ""):
+        if new_repo != _one_line(tf.repo or ""):
             changes["repo"] = new_repo
-        if new_workspace != tf.workspace:
-            changes["workspace"] = new_workspace or ""
+        current = _expand_home(tf.workspace or "", home)
+        if workspace.strip() not in (tf.workspace or "", current):  # 触っていなければ確かめない
+            new_workspace = normalize_workspace(workspace, home=home)
+            if new_workspace != current:
+                changes["workspace"] = new_workspace or ""
         if not changes:
             raise _Unchanged()
         out = _rewrite(text, changes)
