@@ -236,6 +236,35 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertNotIn("リポジトリの Issue（GitHub）", shown)
         self.assertEqual(Markup(shown).tags_with("name", "url")[0][1]["value"], EVIL)
 
+    def test_tasks_root_section(self):
+        counts = {"open": 1, "done": 0, "all": 1}
+        for value in ("~/tasks", EVIL):
+            with self.subTest(value):
+                html = frag_task_filters(counts, [], status="open", place=None, shared_place=None,
+                                         tasks_root=value, home=HOME, tasks_root_value=value,
+                                         tasks_root_notes=[(EVIL, None), (EVIL, EVIL)])
+                m = self.assertSafe(html)
+                self.assertNotIn(EVIL, html)
+                self.assertIn("タスクの置き場所</div>", html)
+                self.assertEqual(len(m.tags_with("data-action", "tasks-root-edit")), 1)
+                form = m.tags_with("id", "tasks-root")
+                self.assertEqual((len(form), form[0][0]), (1, "form"))
+                self.assertIn("hidden", form[0][1])
+                field = m.tags_with("name", "path")
+                self.assertEqual((len(field), field[0][1]["value"], field[0][1]["placeholder"]),
+                                 (1, value, "~/tasks"))
+                self.assertEqual(len(m.tags_with("data-action", "form-cancel")), 2)  # チケットの欄と、この欄
+                self.assertEqual(html.count('<div class="note">'), 2)
+                copies = m.tags_with("data-action", "copy")
+                self.assertEqual([a["data-copy"] for _, a in copies], [EVIL])
+        plain = frag_task_filters(counts, [], status="open", place=None, shared_place=None,
+                                  tasks_root=ROOT, home=HOME, tasks_root_value="~/tasks")
+        self.assertIn("<span>~/tasks</span>", plain)  # ホームの下は ~ で出す
+        self.assertNotIn('class="note"', plain)
+        self.assertEqual(Markup(plain).tags_with("data-action", "copy"), [])
+        # 置き場所が決まっていない（設定を解けない）ときは、欄を出さない
+        self.assertNotIn("tasks-root", frag_task_filters(counts, [], status="open", place=None, shared_place=None))
+
     # 中央：一覧
 
     def test_list_rows(self):
@@ -595,6 +624,9 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertEqual(m.tags_with("name", "ticket")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["placeholder"], "~/dev/app.code-workspace（任意）")
+        self.assertIn('<div class="note">VS Code のパネルの新しい会話は、ワークスペースの最初のフォルダーで始まります。'
+                      'ワークスペースのあるフォルダーで始めたいときは、folders の先頭に {&quot;path&quot;: &quot;.&quot;} を足してください。'
+                      'VS Code のターミナル・Terminal・コピーでは、ワークスペースのあるフォルダーで始まります。</div>', html)
         options = [a for tag, a in m.tags if tag == "option"]
         self.assertEqual([a.get("value") for a in options], ["", EVIL, "/w/x"])
         self.assertIn("selected", options[1])

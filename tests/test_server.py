@@ -1052,6 +1052,86 @@ class TaskServerTest(ServerCase):
         self.assertIsNone(self.app.cfg.ticket_url)
         self.assertIsNone(read_config(self.ledger).ticket_url)
 
+    def test_tasks_root_switch_to_a_root_that_has_the_tasks(self):
+        new = os.path.join(self.root, "moved")
+        for name in ("2026-11-20-a", "2026-11-22-ログイン"):
+            write_file(os.path.join(new, name, "task.md"), "# x\n")
+        self.assertEqual(self.post("/api/tasks-root", {"path": new}, cookie=True, origin=self.origin).status, 403)
+        r = self.action("/api/tasks-root", {"path": new}).json()
+        self.assertEqual((r["ok"], r["needs_confirm"]), (True, False), r)
+        self.assertIn("変えました", r["message"])
+        self.assertEqual(self.app.tasks_root, Path(new))
+        self.assertEqual(self.app.cfg.tasks_root, new)
+        self.assertEqual(read_config(self.ledger).tasks_root, new)
+        self.assertTrue(self.app._wake.is_set())
+        shown = self.frag("/frag/task-filters")
+        self.assertIn(new, shown)
+        self.assertIn('data-copy="%s"' % new, shown)  # Claude Code の書き込みの許可が、まだない
+        self.assertIn('data-copy="%s/README.md"' % new, shown)
+        same = self.action("/api/tasks-root", {"path": new}).json()
+        self.assertEqual((same["ok"], same["message"]), (True, "変わった所はありません"))
+
+    def test_tasks_root_asks_before_switching_to_a_root_without_the_tasks(self):
+        new = os.path.join(self.root, "empty")
+        os.makedirs(new)
+        write_file(os.path.join(new, "2026-11-20-a", "task.md"), "# x\n")  # 2件のうち1件だけある
+        r = self.action("/api/tasks-root", {"path": new}).json()
+        self.assertEqual((r["ok"], r["needs_confirm"]), (False, True), r)
+        self.assertIn("今の置き場所のタスク 1件は、新しい置き場所にありません", r["message"])
+        self.assertEqual(self.app.tasks_root, Path(self.tasks_root))
+        self.assertFalse(os.path.exists(self.ledger / "config.json") and
+                         read_config(self.ledger).tasks_root == new)
+        r = self.action("/api/tasks-root", {"path": new, "confirm": True}).json()
+        self.assertEqual((r["ok"], r["needs_confirm"]), (True, False), r)
+        self.assertEqual(self.app.tasks_root, Path(new))
+        self.assertEqual(read_config(self.ledger).tasks_root, new)
+
+    def test_tasks_root_refuses_bad_input(self):
+        for bad in ("", "tasks", os.path.join(self.root, "nowhere"), self.home, str(self.fake.dir)):
+            r = self.action("/api/tasks-root", {"path": bad}).json()
+            self.assertEqual((r["ok"], r["needs_confirm"]), (False, False), bad)
+            self.assertTrue(r["message"], bad)
+        self.assertEqual(self.app.tasks_root, Path(self.tasks_root))
+
+    def test_tasks_root_rejects_a_non_boolean_confirm(self):
+        r = self.action("/api/tasks-root", {"path": self.tasks_root, "confirm": "yes"})
+        self.assertEqual(r.status, 400)
+
+    def test_tasks_root_switch_after_moving_folders_reindexes_them(self):
+        # Finder の移動と同じ rename（更新時刻は変わらない）で動かしても、新しい置き場所の path で読み直す
+        new = os.path.join(self.root, "moved")
+        os.makedirs(new)
+        for name in ("2026-11-20-a", "2026-11-22-ログイン", "shared"):
+            os.rename(os.path.join(self.tasks_root, name), os.path.join(new, name))
+        with self.app.connect() as conn:
+            conn.execute("INSERT INTO task_overrides VALUES ('2026-11-20-a', ?, 'add', 'x')", (S1,))
+            conn.commit()
+        r = self.action("/api/tasks-root", {"path": new}).json()
+        self.assertEqual((r["ok"], r["needs_confirm"]), (True, False), r)
+        self.app.run_update()
+        with self.app.connect() as conn:
+            paths = [row[0] for row in conn.execute("SELECT path FROM tasks")]
+            docs = [row[0] for row in conn.execute("SELECT path FROM documents")]
+            overrides = conn.execute("SELECT COUNT(*) FROM task_overrides").fetchone()[0]
+            linked = conn.execute("SELECT rule FROM task_sessions WHERE task = '2026-11-20-a' AND session_id = ?",
+                                  (S1,)).fetchone()
+        self.assertEqual(linked and linked[0], "manual")  # 残した記録が、また効く
+        self.assertEqual(sorted(paths), [new + "/2026-11-20-a", new + "/2026-11-22-ログイン"])
+        self.assertIn(new + "/shared/notes-team.md", docs)
+        self.assertFalse([d for d in docs if d.startswith(self.tasks_root + "/")], docs)
+        self.assertEqual(overrides, 1)  # 手で直した記録は、切り替えでも消さない
+
+    def test_vanished_folders_keep_manual_link_records_through_an_update(self):
+        with self.app.connect() as conn:
+            conn.execute("INSERT INTO task_overrides VALUES ('2026-11-20-a', 's1', 'add', 'x')")
+            conn.commit()
+        new = os.path.join(self.root, "elsewhere")
+        os.makedirs(new)
+        os.rename(os.path.join(self.tasks_root, "2026-11-20-a"), os.path.join(new, "2026-11-20-a"))
+        self.app.run_update()  # 古い置き場所のまま更新（フォルダーだけが消えた）
+        with self.app.connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM task_overrides").fetchone()[0], 1)
+
     def test_task_stage_post(self):
         body = {"task": "2026-11-20-a", "stage": "PR"}
         self.assertEqual(self.post("/api/task-stage", body, cookie=True, origin=self.origin).status, 403)  # CSRF なし

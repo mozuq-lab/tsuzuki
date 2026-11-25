@@ -240,11 +240,17 @@ def task_report(cfg: Config, *, claude_dir: Path, home: str) -> Dict[str, Any]:
     return _task_facts(cfg, claude_dir, home)[2]
 
 
+# タスクの点検の名前（tsuzuki doctor に出る。画面の案内も、名前でどの点検かを見分ける）
+CHECK_ROOT, CHECK_README, CHECK_ALLOW, CHECK_SKILLS, CHECK_CLAUDE_MD = (
+    "タスクの置き場所", "タスクの決まり（README.md）", "Claude Code の書き込みの許可",
+    "スキル（task-start・task-handoff）", "CLAUDE.md の決まり")
+TASK_CHECK_NAMES = (CHECK_ROOT, CHECK_README, CHECK_ALLOW, CHECK_SKILLS, CHECK_CLAUDE_MD)
+
+
 def task_checks(cfg: Config, *, claude_dir: Path, home: str) -> List[Check]:
     """タスクの導入の点検。使わない人のために、ok か warn だけで fail にはしない。"""
     root, error, f = _task_facts(cfg, claude_dir, home)
-    names = ["タスクの置き場所", "タスクの決まり（README.md）", "Claude Code の書き込みの許可",
-             "スキル（task-start・task-handoff）", "CLAUDE.md の決まり"]
+    names = list(TASK_CHECK_NAMES)
     if root is None:
         return [Check(n, "warn", error or "") for n in names]
     claude_dir = Path(claude_dir)

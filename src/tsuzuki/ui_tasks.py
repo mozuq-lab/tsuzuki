@@ -5,7 +5,7 @@ ui_render と同じく、台帳と task.md から来た文字はすべてここ�
 組み立てない）。画面の JavaScript とは data-* 属性で約束する：一覧の行の data-task、カードの data-task・
 data-mtime・data-size、操作のボタンの data-action（前からある resume・copy・open-doc・docs・card に、
 task-stage・task-waiting・task-conversation・task-unlink・copy-picked・new-task・task-open・task-link・
-task-settings・task-trash・task-copy-doc・ticket-url-edit・form-cancel を足す）、選ぶ欄の data-copy。
+task-settings・task-trash・task-copy-doc・ticket-url-edit・tasks-root-edit・form-cancel を足す）、選ぶ欄の data-copy。
 """
 import os
 import re
@@ -33,14 +33,23 @@ _PR_NUMBER = re.compile(r"/(\d+)/?$")
 _LINK_SCHEMES = ("http://", "https://")
 
 
+# ワークスペースの入力欄の注意書き（VS Code のパネルは、最初のフォルダーで新しい会話を始める）
+WORKSPACE_NOTE = ("VS Code のパネルの新しい会話は、ワークスペースの最初のフォルダーで始まります。ワークスペースの"
+                  "あるフォルダーで始めたいときは、folders の先頭に {\"path\": \".\"} を足してください。"
+                  "VS Code のターミナル・Terminal・コピーでは、ワークスペースのあるフォルダーで始まります。")
+
 # 左：状況・場所・共通の資料
 
 def frag_task_filters(counts: Dict[str, int], places: List[Tuple[Optional[int], str, int]], *, status: str,
-                      place: Optional[int], shared_place: Optional[int], ticket_url: Optional[str] = None) -> str:
+                      place: Optional[int], shared_place: Optional[int], ticket_url: Optional[str] = None,
+                      tasks_root: Optional[str] = None, home: str = "", tasks_root_value: str = "",
+                      tasks_root_notes: Sequence[Tuple[str, Optional[str]]] = ()) -> str:
     """状況（進行中と待ち・完了・すべて）、場所（「すべて」が最初。場所のないタスクは「場所なし」で、ID は
     NO_PLACE_ID）、共通の資料（押すと資料の画面を共通の資料の場所で絞って開く）。places の場所の ID が None なら
     場所なし。place は選んでいる場所（None はすべて）。最後に、チケットのリンク先（設定 ticket_url。None は
-    リポジトリの Issue）と、それを変える入力欄（初めは hidden）。"""
+    リポジトリの Issue）と、それを変える入力欄（初めは hidden）。その下に、タスクの置き場所（表示用の
+    絶対パスの tasks_root（ホームの下は ~ で出す。None なら出さない）と、入力欄に入れる設定の値 tasks_root_value と、Claude Code
+    側の案内 tasks_root_notes（(文, コピーする文字 or None) の並び）。"""
     out = ['<div class="ph">状況</div>']
     out += [_filter_row("data-status", value, label, _n(counts.get(key, 0)), key == status)
             for key, value, label in STATUS_FILTERS]
@@ -64,6 +73,18 @@ def frag_task_filters(counts: Dict[str, int], places: List[Tuple[Optional[int], 
         '<input name="url"%s placeholder="https://redmine.example.com/issues" spellcheck="false" maxlength="500">'
         '<div class="btns"><button type="submit" class="btn pri">保存</button>%s</div></form>' % (
             _attrs(("value", ticket_url or "")), _button("やめる", "btn", ("data-action", "form-cancel"))))
+    if tasks_root is not None:
+        out.append('<div class="ph">タスクの置き場所</div>')
+        out.append('<div class="turl"><span>%s</span>%s</div>' % (
+            _e(_tilde(tasks_root, home)), _button("変える", "btn", ("data-action", "tasks-root-edit"))))
+        out.append(
+            '<form id="tasks-root" class="ticket-url" autocomplete="off" hidden>'
+            '<input name="path"%s placeholder="~/tasks" spellcheck="false" maxlength="1000">'
+            '<div class="btns"><button type="submit" class="btn pri">保存</button>%s</div></form>' % (
+                _attrs(("value", tasks_root_value)), _button("やめる", "btn", ("data-action", "form-cancel"))))
+        for text, copy in tasks_root_notes:
+            out.append('<div class="note">%s%s</div>' % (_e(text), "" if copy is None else " " + _button(
+                "コピー", "btn", ("data-action", "copy"), ("data-copy", copy))))
     return "".join(out)
 
 
@@ -378,6 +399,7 @@ def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple
         '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
         '<label class="kv"><span class="k">ワークスペース</span><input%s></label>'
         '<div class="note">ワークスペースは .code-workspace のパスです。VS Code で開くときの場所になります</div>'
+        '<div class="note">%s</div>'
         '<div class="btns"><button type="submit" class="btn pri">保存</button>'
         '<button type="button" class="btn" data-action="form-cancel">やめる</button></div>'
         "</form>" % (
@@ -387,7 +409,8 @@ def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple
             _attrs(("name", "ticket"), ("value", tf.ticket or ""), ("maxlength", 200), ("placeholder", "#123（任意）")),
             "".join(options),
             _attrs(("name", "workspace"), ("value", tf.workspace or ""), ("maxlength", 1000), ("spellcheck", "false"),
-                   ("placeholder", "~/dev/app.code-workspace（任意）"))))
+                   ("placeholder", "~/dev/app.code-workspace（任意）")),
+            _e(WORKSPACE_NOTE)))
 
 
 # 部品

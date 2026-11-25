@@ -531,6 +531,7 @@ const ACTIONS = {
   "task-settings": (button) => openSettings(button),
   "form-cancel": (button) => cancelForm(button),
   "ticket-url-edit": () => openTicketUrl(),
+  "tasks-root-edit": () => openTasksRoot(),
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
   "task-trash": (button) => trashTask(button),
@@ -1057,6 +1058,46 @@ async function saveTicketUrl(form) {
   await reloadTasks();
 }
 
+// 左の「タスクの置き場所」の「変える」：入力欄を出して、入力に移る
+function openTasksRoot() {
+  const form = document.getElementById("tasks-root");
+  if (!form) return;
+  form.hidden = false;
+  const input = form.querySelector('[name="path"]');
+  if (input) input.focus();
+}
+
+// タスクの置き場所の「保存」：フォルダーは動かさず、設定だけを切り替える。今のタスクが新しい置き場所に
+// なければ、サーバーが確かめを返すので、続けるときだけ confirm 付きで送り直す。切り替わったら、更新が終わるまで
+// 選んでいたタスクを外し、左と一覧を取り直す（更新が終わると、状態の確認で、もう一度取り直す）
+async function saveTasksRoot(form, confirm) {
+  if (busyWriting()) return;
+  const submit = form.querySelector('[type="submit"]');
+  writing = true;
+  if (submit) submit.disabled = true;
+  let answer;
+  try {
+    answer = await postWrite("/api/tasks-root", { path: String(new FormData(form).get("path") || ""),
+      confirm: confirm === true });
+  } finally {
+    writing = false;
+    if (submit) submit.disabled = false;
+  }
+  if (!answer) return;
+  if (answer.needs_confirm && confirm !== true) {
+    askToContinue(answer.message, () => saveTasksRoot(form, true));
+    return;
+  }
+  toast(answer.message);
+  if (!answer.ok) return;
+  form.hidden = true;
+  panes.left.url = null; // 同じ URL でも取り直す
+  panes.list.url = null;
+  go({ task: "", d: "" }, false);
+  await reloadTasks();
+  for (const delay of [600, 1500, 3000]) setTimeout(pollStatus, delay);
+}
+
 // 入力欄の「やめる」：設定の欄（#task-settings）は、カードを取り直して元に戻す。ほかの欄は閉じる
 function cancelForm(button) {
   const form = button.closest("form");
@@ -1203,6 +1244,9 @@ function onSubmit(event) {
   } else if (form.id === "ticket-url") {
     event.preventDefault();
     saveTicketUrl(form);
+  } else if (form.id === "tasks-root") {
+    event.preventDefault();
+    saveTasksRoot(form, false);
   }
 }
 

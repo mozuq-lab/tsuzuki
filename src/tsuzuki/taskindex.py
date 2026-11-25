@@ -16,6 +16,7 @@ from tsuzuki.tasks import (
 )
 
 SHARED_MTIME_KEY = "tasks:shared_mtime"
+ROOT_KEY = "tasks:root"  # 台帳に入れたときのタスクの置き場所（変わったら、古い置き場所の行を空にする）
 LIST_ERROR = "タスクの置き場所を一覧できませんでした（この回は何も消しません）: %s: %s"
 
 
@@ -28,6 +29,12 @@ class TaskSync:
 
 def sync_tasks(conn: sqlite3.Connection, cfg: Config, *, tasks_root: str, home: str, places) -> TaskSync:
     root = os.path.normpath(tasks_root)
+    stored = get_meta(conn, ROOT_KEY)
+    if stored != root:
+        if stored:  # 画面を通さずに置き場所が変わった（config.json を直して起動し直したなど）
+            reset_task_index(conn, stored)
+        with conn:
+            set_meta(conn, ROOT_KEY, root)
     if not os.path.isdir(root):
         # 置き場所が見えない回は、手で直した記録（task_overrides）を消さない
         had = conn.execute("SELECT 1 FROM tasks LIMIT 1").fetchone() is not None
@@ -51,7 +58,7 @@ def sync_tasks(conn: sqlite3.Connection, cfg: Config, *, tasks_root: str, home: 
         except OSError:
             continue  # 読めない task.md は、今ある行のままにして先へ進む
     names = {os.path.basename(p) for p in found}
-    changed |= _drop_vanished(conn, root, names)
+    changed |= _drop_vanished(conn, names)
     _sync_shared(conn, cfg, root, home, places)
     return TaskSync(changed=changed, tasks=len(found))
 
@@ -106,8 +113,9 @@ def _sync_one(conn, cfg: Config, root: str, home: str, task_dir: str, place_id: 
     md_path = os.path.join(task_dir, TASK_MD)
     st = os.stat(md_path)
     files, signature = _scan(cfg, task_dir)
-    row = conn.execute("SELECT md_mtime, md_size, files_mtime FROM tasks WHERE name = ?", (name,)).fetchone()
-    if not force and row is not None and tuple(row) == (st.st_mtime, st.st_size, signature):
+    row = conn.execute("SELECT md_mtime, md_size, files_mtime, path FROM tasks WHERE name = ?", (name,)).fetchone()
+    # フォルダーを動かしても更新時刻は変わらないので、path が違えば変わったものとして読み直す
+    if not force and row is not None and tuple(row) == (st.st_mtime, st.st_size, signature, task_dir):
         return False
     with open(md_path, encoding="utf-8", errors="replace") as f:
         tf = parse_task_md(f.read())
@@ -168,18 +176,28 @@ def _drop_missing_documents(conn, directory: str, present: Set[str]) -> None:
             conn.executemany("DELETE FROM documents WHERE id = ?", gone)
 
 
-def _drop_vanished(conn, root: str, names: Set[str]) -> bool:
+def _drop_vanished(conn, names: Set[str]) -> bool:
+    """なくなったタスクの行・会話との結び付き・資料を消す。手で足した・外した記録（task_overrides）は残す
+    （フォルダーが戻れば元に戻る）。消すのは、画面でゴミ箱へ動かしたとき（forget_task）だけ。"""
     gone = [(n, p) for n, p in conn.execute("SELECT name, path FROM tasks").fetchall() if n not in names]
-    # 手で直した記録だけが残っていて、タスクの行が前からないものも消す
-    stale = {r[0] for r in conn.execute("SELECT task FROM task_overrides").fetchall()} - names
-    stale |= {r[0] for r in conn.execute("SELECT task FROM task_sessions").fetchall()} - names
+    stale = {r[0] for r in conn.execute("SELECT task FROM task_sessions").fetchall()} - names
     stale -= {n for n, _ in gone}
-    # 手で直した記録は、フォルダー自体がなくなったときだけ消す。task.md が一時的に見えないだけなら残す
     for n, p in gone:
-        _drop_task(conn, n, p, keep_overrides=os.path.isdir(os.path.join(root, n)))
+        _drop_task(conn, n, p, keep_overrides=True)
     for n in stale:
-        _drop_task(conn, n, None, keep_overrides=os.path.isdir(os.path.join(root, n)))
+        _drop_task(conn, n, None, keep_overrides=True)
     return bool(gone)
+
+
+def reset_task_index(conn, old_root: str) -> None:
+    """タスクの置き場所を切り替えるとき、古い置き場所の分の行を空にする（次の更新が、新しい置き場所の
+    すべてのタスクと shared/ を読み直す）。手で足した・外した記録（task_overrides）は残す。"""
+    with conn:
+        conn.execute("DELETE FROM tasks")
+        conn.execute("DELETE FROM task_sessions")
+        low, high = _bounds(os.path.normpath(old_root))
+        conn.execute("DELETE FROM documents WHERE path >= ? AND path < ?", (low, high))
+        conn.execute("DELETE FROM meta WHERE key = ?", (SHARED_MTIME_KEY,))
 
 
 def forget_task(conn, name: str, path: str) -> None:

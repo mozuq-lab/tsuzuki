@@ -24,7 +24,8 @@ MAKE_DEMO = ROOT / "scripts" / "make_demo.py"
 # 断片の data-action（タスクの操作を含む）。app.js はすべてを受け持つ
 ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans", "open-doc", "open-place", "docs",
            "fold", "read-more", "task-stage", "task-waiting", "task-settings", "copy-picked", "task-unlink", "task-conversation",
-           "new-task", "task-open", "task-link", "task-trash", "task-copy-doc", "form-cancel", "ticket-url-edit"}
+           "new-task", "task-open", "task-link", "task-trash", "task-copy-doc", "form-cancel", "ticket-url-edit",
+           "tasks-root-edit"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
 HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く
@@ -185,6 +186,19 @@ class UiAssetsTest(unittest.TestCase):
         # 見た目は class と hidden で切り替える（style 属性は CSP で止まる）
         self.assertNotIn(".style", js)
         self.assertNotIn("setAttribute(\"style\"", js)
+
+    def test_script_changes_the_tasks_root_with_a_confirmation(self):
+        js = _asset("app.js")
+        self.assertIn('"tasks-root-edit": () => openTasksRoot()', js)
+        submit = _function(js, "onSubmit")
+        self.assertIn('form.id === "tasks-root"', submit)
+        save = _function(js, "saveTasksRoot")
+        self.assertIn('"/api/tasks-root"', save)
+        self.assertIn("postWrite(", save)
+        self.assertIn("askToContinue(answer.message", save)
+        self.assertIn("saveTasksRoot(form, true)", save)
+        self.assertIn("panes.left.url = null", save)
+        self.assertIn('go({ task: "", d: "" }, false)', save)
 
     def test_script_selects_only_rows_whose_id_fits_the_hash(self):
         # 台帳のセッション ID は UUID とは限らない。URL の # に残せない ID の行を選ぶと normalize で消え、

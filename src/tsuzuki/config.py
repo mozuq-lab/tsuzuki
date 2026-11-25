@@ -146,7 +146,17 @@ def normalize_ticket_url(value: str) -> Optional[str]:
 
 
 def write_ticket_url(ledger: Path, value: Optional[str]) -> None:
-    """config.json の ticket_url だけを書き換える（ほかの項目と知らない項目はそのまま）。読めない・正しくない
+    """config.json の ticket_url だけを書き換える。"""
+    _write_setting(ledger, "ticket_url", value)
+
+
+def write_tasks_root(ledger: Path, value: str) -> None:
+    """config.json の tasks_root だけを書き換える（フォルダーは動かさない）。"""
+    _write_setting(ledger, "tasks_root", value)
+
+
+def _write_setting(ledger: Path, key: str, value: Any) -> None:
+    """config.json の 1 項目だけを書き換える（ほかの項目と知らない項目はそのまま）。読めない・正しくない
     ときは ConfigError で、書かない。同じフォルダーの一時ファイルに書いてから置き換え、元の権限を保つ。"""
     path = ledger / "config.json"
     if path.exists():
@@ -159,7 +169,7 @@ def write_ticket_url(ledger: Path, value: Optional[str]) -> None:
         mode = os.stat(str(path)).st_mode & 0o777
     else:
         data, mode = _to_dict(Config()), 0o600
-    data["ticket_url"] = value
+    data[key] = value
     _validate(_from_dict(dict(data)))
     tmp = None  # type: Optional[str]
     try:
@@ -175,6 +185,22 @@ def write_ticket_url(ledger: Path, value: Optional[str]) -> None:
             except OSError:
                 pass
         raise ConfigError("config.json に書けません: %s" % e)
+
+
+def normalize_tasks_root_input(text: str, *, home: str, claude_dir: Path) -> str:
+    """画面で入れたタスクの置き場所を確かめる。入れた文字のまま（前後の空白だけ除いて）返す。
+    起動時と同じ断り（resolve_tasks_root）に加えて、あるフォルダーであることを求める。"""
+    text = text.strip()
+    if not text:
+        raise ConfigError("タスクの置き場所を入れてください")
+    if not (text.startswith(("/", "~/")) or text == "~"):
+        raise ConfigError("タスクの置き場所は / か ~ で始まるパスで入れてください")
+    if any(not ch.isprintable() for ch in text):
+        raise ConfigError("タスクの置き場所に使えない文字があります")
+    root = resolve_tasks_root(Config(tasks_root=text), home=home, claude_dir=claude_dir)
+    if not root.is_dir():
+        raise ConfigError("フォルダーがありません。先に作ってから指定してください: %s" % root)
+    return text
 
 
 def load_config(ledger: Path) -> Config:

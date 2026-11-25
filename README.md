@@ -30,7 +30,8 @@ Claude Code は既定では30日たった記録を消します（設定 `cleanup
 | `~/.claude/projects/*/*.jsonl` | セッションの記録（会話）。サブエージェントの記録は読みません |
 | `~/.claude/history.jsonl` | 入力履歴。設定 `index_history` を false にすると読みません |
 | `~/.claude/sessions/*.json` | 今動いているセッション。「実行中」の印と、再開の前の確認と、フックに使います |
-| `~/.claude/settings.json` | `tsuzuki doctor` がフックの設定を確かめるときだけ読みます |
+| `~/.claude/settings.json` | `tsuzuki doctor` がフックの設定を確かめるときと、タスクの画面の左の列が、タスクの置き場所の書き込みの許可を確かめるときに読みます |
+| `~/.claude/CLAUDE.md`、`~/.claude/skills/*/SKILL.md` | `tsuzuki doctor` と、タスクの画面の左の列が、タスクの決まりが書かれているか・スキルがあるかを確かめるときだけ読みます |
 | 資料 | セッションが作った・直した・読んだ文書と、場所の中にある文書。拡張子が設定 `doc_extensions` にあるものだけです |
 
 `/tmp` などの一時領域にある文書は、資料に入れません。`~/.claude` の中で資料にするのは、`plans/*.md` と `projects/*/memory/*.md` だけです。本文を検索できるのは .md・.txt・.csv・.html などのテキストの資料で、PDF や Office の文書は一覧に出ても検索では見つかりません。
@@ -39,7 +40,7 @@ Claude Code は既定では30日たった記録を消します（設定 `cleanup
 
 | 書く物 | 中身 |
 |---|---|
-| `config.json` | 設定。初回の `tsuzuki serve` か `tsuzuki index` が、既定値を書いて作ります。タスクの画面の「チケットのリンク先」を保存すると、`ticket_url` だけを書き換えます（ほかの項目はそのまま） |
+| `config.json` | 設定。初回の `tsuzuki serve` か `tsuzuki index` が、既定値を書いて作ります。タスクの画面の「チケットのリンク先」「タスクの置き場所」を保存すると、`ticket_url`・`tasks_root` だけを書き換えます（ほかの項目はそのまま） |
 | `ledger.db` | 台帳（権限 0600）。`ledger.db-wal` と `ledger.db-shm` も一緒にできます |
 | `token` | 画面を開くための鍵（権限 0600） |
 | `lineage.jsonl` | フックが書く、親のセッションの記録。フックを入れたときだけできます |
@@ -267,7 +268,7 @@ tsuzuki vscode install
 | `doc_extensions` | `[".md", ".markdown", ".mdx", ".txt", ".html", ".htm", ".csv", ".pdf", ".docx", ".pptx", ".xlsx"]` | 資料とみなす拡張子 |
 | `doc_scan` | 下の表のとおり | 場所の中から資料を探す走査 |
 | `headless_in_list` | `false` | 画面の「ヘッドレスも並べる」を、初めから入れておくか |
-| `tasks_root` | `"~/tasks"` | タスクの置き場所 |
+| `tasks_root` | `"~/tasks"` | タスクの置き場所。タスクの画面の左の「タスクの置き場所」からも変えられます（「タスク」の「設定」を見てください） |
 | `ticket_url` | `null` | チケットの URL の型。`{n}` が番号に替わります（例: `"https://github.com/org/repo/issues/{n}"`）。`null` なら、タスクのリポジトリの `.git/config` にある `origin` から、GitHub の課題の URL（`https://<ホスト>/<owner>/<repo>/issues/<番号>`）を作ります。作れないときは番号だけを出します。タスクの画面の左の「チケットのリンク先」から変えられます（例: Redmine なら `https://redmine.example.com/issues` と入れると、`https://redmine.example.com/issues/{n}` になります）。空にすると `null` に戻ります |
 | `new_conversation_prompt` | `"@{task_md} を読んで、次の一手から進めてください。"` | 「新しい会話」の最初の依頼。`@{task_md}` は `@<task.md の絶対パス>` に替わり、空白を含むパスなら `@"…"` で囲みます。`@` のない `{task_md}` は、絶対パスだけに替わります |
 | `default_branches` | `["main", "master", "develop"]` | セッションのブランチがこれらのときは、「同じブランチ」を根拠にタスクへ結び付けません |
@@ -485,6 +486,10 @@ Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと 
 ### 設定
 
 タスクの設定は、`~/.tsuzuki/config.json` の `tasks_root`、`ticket_url`、`new_conversation_prompt`、`default_branches` です。意味は「設定」の表にあります。`ticket_url` を決めると、カードのチケットが、その URL へのリンクになります。画面の左の「チケットのリンク先」から決められます（Redmine なら `https://redmine.example.com/issues` のように、`{n}` の前までを入れます）。決めなければ、タスクのリポジトリの `origin` から GitHub の課題へのリンクを作ります。たとえば `origin` が `git@github.com:org/repo.git` でチケットが `#123` なら、`https://github.com/org/repo/issues/123` を開きます。
+
+タスクの置き場所は、画面の左の「タスクの置き場所」の「変える」から切り替えられます（`tasks_root` を書き換えるのと同じです）。Tsuzuki はフォルダーを動かしません。先に Finder などで動かしてください。いちばん簡単なのは、置き場所のフォルダー（`~/tasks` など）ごと動かす（名前を変える）ことです。入れるのは `/` か `~` で始まる、すでにあるフォルダーのパスです（ホームやボリュームの直下、Claude Code の設定ディレクトリの中は選べません）。今あるタスクが新しい置き場所に見つからないときは、「それらは一覧から消えます」と確かめてから切り替えます。手で足した・外した結び付けの記録は残るので、フォルダーを新しい置き場所に移せば元に戻ります（ゴミ箱に入れたときだけは、その記録も消えます）。切り替えるとすぐ、新しい置き場所のタスクと `shared/` を読み直します。
+
+Tsuzuki は `~/.claude` に書かないので、Claude Code 側の変更は左の列に案内だけを出します。`permissions.additionalDirectories` に新しい置き場所を足すこと、`CLAUDE.md` にその `README.md` のパスを書くこと（どちらも「コピー」ボタンで書く文字をコピーできます）、新しい置き場所に `README.md` を置くこと（なければ `tsuzuki templates` が書き出すものをコピーします）です。整っているかは `tsuzuki doctor` でも点検できます。
 
 ### 制約
 

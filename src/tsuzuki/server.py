@@ -35,7 +35,9 @@ from typing import Any, BinaryIO, Callable, Dict, FrozenSet, Iterator, List, Opt
 from urllib.parse import parse_qs, unquote
 
 from tsuzuki import taskviews, ui_render, ui_tasks, views
-from tsuzuki.config import Config, ConfigError, normalize_ticket_url, write_ticket_url
+from tsuzuki.config import (Config, ConfigError, normalize_tasks_root_input, normalize_ticket_url, resolve_tasks_root,
+                            write_tasks_root, write_ticket_url)
+from tsuzuki.doctor import CHECK_ALLOW, CHECK_CLAUDE_MD, task_checks
 from tsuzuki.indexer import UpdateReport, update, update_lock
 from tsuzuki.resume import ActionOutcome, is_session_id, open_document, open_place, resume, start_conversation
 from tsuzuki.vscode_ext import VSCodeTerminal, requests_dir
@@ -43,8 +45,8 @@ from tsuzuki.retention import iso_utc
 from tsuzuki.search import (DEFAULT_TARGETS, MAX_TERM_CHARS, MAX_TERMS, ORDERS, RESULT_LIMIT, TARGETS, DocHit,
                            SearchQuery, SearchResult, parse_query, search)
 from tsuzuki.sources.live import LiveSession, live_sessions
-from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger
-from tsuzuki.taskindex import forget_task, refresh_task
+from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger, set_meta
+from tsuzuki.taskindex import ROOT_KEY, forget_task, refresh_task, reset_task_index
 from tsuzuki.tasklinks import link_tasks, set_override
 from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, parse_task_md, stage_label, task_title, within
 from tsuzuki.taskwrite import TaskWriteError, copy_into_task, create_task, set_fields, set_waiting, trash_task, update_settings
@@ -120,6 +122,9 @@ WAITING_SET = {True: "待ちにしました", False: "待ちを解きました"}
 SETTINGS_SET = "設定を変えました"
 NO_SETTINGS_CHANGE = "変わった所はありません"
 TICKET_URL_SET = "チケットのリンク先を変えました"
+TASKS_ROOT_SET = "タスクの置き場所を変えました。新しい置き場所のタスクを読み込んでいます"
+TASKS_ROOT_MISSING = ("今の置き場所のタスク %d件は、新しい置き場所にありません。切り替えると、それらは一覧から消えます。"
+                      "手で足した・外した結び付けの記録は残るので、フォルダーを新しい置き場所に移せば元に戻ります。続けますか？")
 TICKET_URL_RESET = "チケットのリンク先を、リポジトリの Issue に戻しました"
 LINK_SET = {"add": "タスクに足しました", "remove": "タスクから外しました"}
 TASK_STATUSES = ("open", "done", "all")  # 一覧と左の状況の絞り込み（空は open）
@@ -726,8 +731,28 @@ def _frag_task_filters(app: App, conn: sqlite3.Connection, _: None, p: _Params) 
                  else views.place_labels(conn, [place]).get(place))
         if label is not None:
             places.append((None if place == ui_tasks.NO_PLACE_ID else place, label, 0))
-    return ui_tasks.frag_task_filters(counts, places, status=status, place=place,
-                                      shared_place=_shared_place(app, conn), ticket_url=app.cfg.ticket_url)
+    root, notes = app.tasks_root, []
+    if root is not None:
+        notes = _tasks_root_notes(app, root)
+    return ui_tasks.frag_task_filters(
+        counts, places, status=status, place=place, shared_place=_shared_place(app, conn),
+        ticket_url=app.cfg.ticket_url, tasks_root=None if root is None else str(root), home=app.home,
+        tasks_root_value=app.cfg.tasks_root, tasks_root_notes=notes)
+
+
+# 左の「タスクの置き場所」の下に出す、Claude Code 側の案内（点検 tsuzuki doctor と同じ確かめ方）
+_COPY_FOR_CHECK = {CHECK_ALLOW: lambda root: str(root),
+                   CHECK_CLAUDE_MD: lambda root: os.path.join(str(root), "README.md")}
+
+
+def _tasks_root_notes(app: App, root: Path) -> List[Tuple[str, Optional[str]]]:
+    """今の置き場所で、まだ整っていない点検の文と、コピーする文字（許可するパス・README.md のパス）。"""
+    notes = []  # type: List[Tuple[str, Optional[str]]]
+    for check in task_checks(app.cfg, claude_dir=app.claude_dir, home=app.home):
+        if check.status != "ok":
+            copy = _COPY_FOR_CHECK.get(check.name)
+            notes.append(("%s: %s" % (check.name, check.detail), None if copy is None else copy(root)))
+    return notes
 
 
 def _frag_tasks(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:
@@ -965,6 +990,40 @@ def _api_ticket_url(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     return _task_done(TICKET_URL_SET if value is not None else TICKET_URL_RESET)
 
 
+def _api_tasks_root(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """タスクの置き場所（設定 tasks_root）を切り替える。フォルダーは動かさない（利用者が先に動かす）。
+    今のタスクが新しい置き場所になければ、一覧から消えることを確かめてから（confirm）切り替える。"""
+    text, confirm = _task_text(data, "path"), data.get("confirm", False)
+    if not isinstance(confirm, bool):
+        raise _HttpError(400, BAD_REQUEST % "confirm")
+    try:
+        text = normalize_tasks_root_input(text, home=app.home, claude_dir=app.claude_dir)
+        new = resolve_tasks_root(Config(tasks_root=text), home=app.home, claude_dir=app.claude_dir)
+    except ConfigError as e:
+        return _task_failed(str(e))
+    with update_lock(app.ledger_dir), app.lock:  # 更新が、切り替えの途中の置き場所を読まないように
+        if app.tasks_root is not None and os.path.normpath(str(app.tasks_root)) == os.path.normpath(str(new)):
+            return _task_done(NO_SETTINGS_CHANGE)
+        with app.connect() as conn:
+            names = [row[0] for row in conn.execute("SELECT name FROM tasks")]
+            missing = sum(1 for name in names if not os.path.isdir(os.path.join(str(new), name)))
+            if missing and not confirm:
+                return {"ok": False, "needs_confirm": True, "message": TASKS_ROOT_MISSING % missing}
+            try:
+                write_tasks_root(app.ledger_dir, text)
+            except ConfigError as e:
+                return _task_failed(str(e))
+            if app.tasks_root is not None:
+                reset_task_index(conn, str(app.tasks_root))  # 動かしたフォルダーも、新しい path で読み直させる
+                with conn:
+                    set_meta(conn, ROOT_KEY, os.path.normpath(str(new)))
+        app.cfg.tasks_root = text
+        app.tasks_root = new
+    app.request_update()
+    app.forget_searches()
+    return _task_done(TASKS_ROOT_SET)
+
+
 def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """利用者がセッションをタスクに足す（add）・タスクから外す（remove）。記録は作り直しでも消えない（tasklinks）。"""
     task, session_id, action = _task_text(data, "task"), _task_text(data, "session_id"), _task_text(data, "action")
@@ -1125,6 +1184,7 @@ _ACTIONS = {"/api/resume": _api_resume, "/api/open": _api_open, "/api/open-place
             "/api/reindex": _api_reindex, "/api/task-new": _api_task_new, "/api/task-stage": _api_task_stage,
             "/api/task-waiting": _api_task_waiting, "/api/task-settings": _api_task_settings,
             "/api/task-link": _api_task_link, "/api/ticket-url": _api_ticket_url,
+            "/api/tasks-root": _api_tasks_root,
             "/api/task-conversation": _api_task_conversation, "/api/task-trash": _api_task_trash,
             "/api/task-copy-doc": _api_task_copy_doc,
             }  # type: Dict[str, Callable[[App, Dict[str, Any]], Dict[str, Any]]]

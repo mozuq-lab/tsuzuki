@@ -12,11 +12,13 @@ from tsuzuki.config import (
     Config,
     ConfigError,
     load_config,
+    normalize_tasks_root_input,
     normalize_ticket_url,
     read_config,
     resolve_claude_dir,
     resolve_port,
     resolve_tasks_root,
+    write_tasks_root,
     write_ticket_url,
 )
 
@@ -32,6 +34,43 @@ class ConfigTest(unittest.TestCase):
         for bad in ("redmine.example.com", "javascript:alert(1)", "https://a b", "https://a\u2028b", "https://a\x00b"):
             with self.subTest(bad), self.assertRaises(ConfigError):
                 normalize_ticket_url(bad)
+
+    def test_normalize_tasks_root_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.realpath(d)
+            claude = Path(home) / ".claude"
+            claude.mkdir()
+            (Path(home) / "x").mkdir()
+            (Path(home) / "with space").mkdir()
+            abs_dir = Path(home) / "abs"
+            abs_dir.mkdir()
+
+            def norm(text):
+                return normalize_tasks_root_input(text, home=home, claude_dir=claude)
+            self.assertEqual(norm(" ~/x "), "~/x")
+            self.assertEqual(norm(str(abs_dir)), str(abs_dir))
+            self.assertEqual(norm("~/with space"), "~/with space")
+            for bad in ("", "   ", "tasks", "./x", "~foo/x", "~/x\u2028y", "~/x\x00", "~", home, str(claude),
+                        str(claude / "inside"), "~/.claude", "~/missing"):
+                with self.subTest(bad), self.assertRaises(ConfigError):
+                    norm(bad)
+            with self.assertRaises(ConfigError) as cm:
+                norm("~/missing")
+            self.assertIn("フォルダーがありません。先に作ってから指定してください", str(cm.exception))
+
+    def test_write_tasks_root_keeps_other_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "config.json").write_text(
+                json.dumps({"port": 9000, "extra": 1, "ticket_url": "https://r.example.com/issues/{n}"}),
+                encoding="utf-8")
+            write_tasks_root(Path(d), "~/work/tasks")
+            data = json.loads((Path(d) / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual((data["port"], data["extra"], data["ticket_url"], data["tasks_root"]),
+                             (9000, 1, "https://r.example.com/issues/{n}", "~/work/tasks"))
+            self.assertEqual(read_config(Path(d)).tasks_root, "~/work/tasks")
+            (Path(d) / "config.json").write_text("{broken", encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                write_tasks_root(Path(d), "~/x")
 
     def test_write_ticket_url_keeps_other_settings(self):
         with tempfile.TemporaryDirectory() as d:

@@ -7,6 +7,7 @@ from unittest import mock
 
 from tsuzuki.config import Config
 from tsuzuki.indexer import _Places, update
+from tsuzuki.store import get_meta
 from tsuzuki.taskindex import refresh_task, sync_tasks
 from tests.fixtures import FakeClaude, allow_system_tmp, count, make_ledger, write_file
 from tests.test_tasks import SAMPLE
@@ -79,16 +80,56 @@ class TaskIndexTest(unittest.TestCase):
         paths = [r[0] for r in self.conn.execute("SELECT path FROM documents")]
         self.assertNotIn(self.root + "/2026-11-20-login/research-a.md", paths)
 
-    def test_vanished_task_drops_rows_and_overrides(self):
+    def test_vanished_task_drops_rows_but_keeps_overrides(self):
         self.sync()
         self.conn.execute("INSERT INTO task_overrides VALUES ('2026-11-21-csv', 's1', 'add', 'x')")
         self.conn.commit()
         shutil.rmtree(self.root + "/2026-11-21-csv")
         self.assertTrue(self.sync().changed)
-        self.assertEqual(count(self.conn, "task_overrides"), 0)
+        self.assertEqual(count(self.conn, "task_overrides"), 1)  # 手で直した記録は、フォルダーが消えても残す
         self.assertEqual([r[0] for r in self.conn.execute("SELECT name FROM tasks")], ["2026-11-20-login"])
         paths = [r[0] for r in self.conn.execute("SELECT path FROM documents")]
         self.assertFalse([p for p in paths if "2026-11-21-csv" in p])
+
+    def test_a_moved_task_gets_its_new_path(self):
+        # フォルダーを rename で動かすと、task.md の更新時刻も大きさも変わらない。それでも path は付け替える
+        self.sync()
+        new_root = os.path.join(self.d, "moved")
+        os.makedirs(new_root)
+        os.rename(self.root + "/2026-11-20-login", new_root + "/2026-11-20-login")
+        self.root = new_root
+        self.sync()
+        self.assertEqual(self.conn.execute("SELECT path FROM tasks WHERE name = '2026-11-20-login'").fetchone()[0],
+                         new_root + "/2026-11-20-login")
+
+    def sync_at(self, root):
+        places = _Places(self.conn, self.cfg, self.home, root)
+        return sync_tasks(self.conn, self.cfg, tasks_root=root, home=self.home, places=places)
+
+    def test_first_sync_records_the_root_without_a_reset(self):
+        self.assertIsNone(get_meta(self.conn, "tasks:root"))
+        self.sync()
+        self.assertEqual(get_meta(self.conn, "tasks:root"), self.root)
+        self.assertEqual(count(self.conn, "tasks"), 2)
+
+    def test_changing_the_root_without_the_screen_drops_the_old_root_rows(self):
+        # config.json を手で直して起動し直した場合や tsuzuki index でも、古い置き場所の行を残さない
+        self.sync()
+        self.conn.execute("INSERT INTO task_overrides VALUES ('2026-11-21-csv', 's1', 'add', 'x')")
+        self.conn.commit()
+        a, b = self.root, os.path.join(self.d, "b")
+        os.makedirs(b)
+        for name in ("2026-11-20-login", "2026-11-21-csv", "shared"):
+            os.rename(os.path.join(a, name), os.path.join(b, name))  # 更新時刻は変わらない
+        self.sync_at(b)
+        paths = [r[0] for r in self.conn.execute("SELECT path FROM documents")]
+        self.assertFalse([p for p in paths if p.startswith(a + "/")], paths)
+        self.assertIn(b + "/shared/notes-team.md", paths)
+        self.assertIn(b + "/2026-11-20-login/research-a.md", paths)
+        self.assertEqual(sorted(r[0] for r in self.conn.execute("SELECT path FROM tasks")),
+                         [b + "/2026-11-20-login", b + "/2026-11-21-csv"])
+        self.assertEqual(count(self.conn, "task_overrides"), 1)
+        self.assertEqual(get_meta(self.conn, "tasks:root"), b)
 
     def test_missing_root_keeps_overrides(self):
         self.sync()
