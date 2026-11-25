@@ -1016,6 +1016,22 @@ class TaskServerTest(ServerCase):
                 int(re.search(r'data-size="([^"]*)"', card).group(1)))
 
 
+    def test_resume_from_the_task_card_uses_the_workspace(self):
+        ws_dir = os.path.join(self.root, "ws")
+        os.makedirs(os.path.join(ws_dir, "app"))
+        ws = os.path.join(ws_dir, "x.code-workspace")
+        write_file(ws, json.dumps({"folders": [{"path": "app"}]}))
+        write_file(self.task_md, (TASK_MD % self.proj).replace("repo:", "workspace: %s\nrepo:" % ws, 1))
+        self.reindex(tasks_root=Path(self.tasks_root))
+        r = self.action("/api/resume", {"session_id": S1, "how": "vscode", "confirm": False, "task": "2026-11-20-a"})
+        self.assertTrue(r.json()["ok"], r.json())
+        self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", ws])
+        self.calls.clear()
+        r = self.action("/api/resume", {"session_id": S1, "how": "vscode", "confirm": False})
+        self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", self.proj])
+        r = self.action("/api/resume", {"session_id": S1, "how": "vscode", "task": "nope"})
+        self.assertEqual(r.json(), {"ok": False, "needs_confirm": False, "message": "台帳にないタスクです"})
+
     def test_task_fragments(self):
         self.assertIn('data-task="2026-11-20-a"', self.get("/frag/tasks", cookie=True).body)
         self.assertEqual(self.get("/frag/task/" + quote("2026-11-22-ログイン"), cookie=True).status, 200)

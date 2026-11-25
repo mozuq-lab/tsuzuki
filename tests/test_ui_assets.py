@@ -178,6 +178,15 @@ class UiAssetsTest(unittest.TestCase):
         self.assertNotIn(".style", js)
         self.assertNotIn("setAttribute(\"style\"", js)
 
+    def test_resume_carries_the_task_of_the_card(self):
+        js = _asset("app.js")
+        resume = _function(js, "resumeSession")
+        self.assertRegex(resume, r"task: task|task,")
+        self.assertIn("resumeSession(sessionId, how, true, task)", resume)
+        table = re.search(r"\nconst ACTIONS = \{\n(.*?)\n\};", js, re.S).group(1)
+        entry = re.search(r'^ {2}"resume":.*?^ {2}\},?$|^ {2}"resume":.*$', table, re.M | re.S).group(0)
+        self.assertIn('closest(".task-card")', entry)
+
     def test_script_selects_only_rows_whose_id_fits_the_hash(self):
         # 台帳のセッション ID は UUID とは限らない。URL の # に残せない ID の行を選ぶと normalize で消え、
         # 最初の行の自動選択が同じ描画をくり返して画面が止まる。そうした行は ↑↓・クリック・自動選択で選ばない

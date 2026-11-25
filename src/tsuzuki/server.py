@@ -840,9 +840,33 @@ def _api_resume(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     session_id, how, confirm = _text_field(data, "session_id"), _text_field(data, "how"), data.get("confirm", False)
     if not isinstance(confirm, bool):
         raise _HttpError(400, BAD_REQUEST % "confirm")
+    task = data.get("task")
+    if task is not None and not isinstance(task, str):
+        raise _HttpError(400, BAD_REQUEST % "task")
     with app.connect() as conn:
+        workspace = None
+        if task is not None:
+            if _task_folder(conn, task) is None:
+                return _outcome(ActionOutcome(False, False, UNKNOWN_TASK))
+            workspace = _task_workspace(app, conn, task)
         return _outcome(resume(conn, session_id, how, cfg=app.cfg, live=app.live(), confirm=confirm,
-                               runner=app.runner, sleep=app.sleep, terminal=app.vscode_terminal()))
+                               runner=app.runner, sleep=app.sleep, terminal=app.vscode_terminal(),
+                               workspace=workspace))
+
+
+def _task_workspace(app: App, conn: sqlite3.Connection, task: str) -> Optional[str]:
+    """タスクの task.md の workspace（手で ~ と書かれていれば home で展開）。task.md が読めなければ None。"""
+    folder = _task_folder(conn, task)
+    if folder is None:
+        return None
+    try:
+        with open(os.path.join(folder, TASK_MD), encoding="utf-8") as f:
+            workspace = parse_task_md(f.read()).workspace
+    except (OSError, ValueError):
+        return None
+    if workspace and (workspace == "~" or workspace.startswith("~/")):
+        workspace = str(app.home).rstrip("/") + workspace[1:]
+    return workspace
 
 
 def _api_open(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -978,7 +1002,7 @@ def _api_task_conversation(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     task, how = _task_text(data, "task"), _task_text(data, "how")
     with app.connect() as conn:
         out = start_conversation(conn, task, how, cfg=app.cfg, runner=app.runner, sleep=app.sleep,
-                                 terminal=app.vscode_terminal())
+                                 terminal=app.vscode_terminal(), workspace=_task_workspace(app, conn, task))
     answer = _outcome(out)
     answer["command"] = out.command
     return answer

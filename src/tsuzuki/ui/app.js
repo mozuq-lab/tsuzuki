@@ -470,7 +470,10 @@ function moveSelection(step) {
 // 操作（data-action）
 
 const ACTIONS = {
-  "resume": (button) => resumeSession(cardSession(button), button.dataset.how, false),
+  "resume": (button) => {
+    const card = button.closest(".task-card");
+    resumeSession(cardSession(button), button.dataset.how, false, card ? card.dataset.task : undefined);
+  },
   "copy": (button) => copyText(button.dataset.copy),
   "conversation": (button) => go({ s: button.dataset.session, d: "", c: "1", t: button.dataset.turn || "" }, true),
   "card": (button) => openCard(button.dataset.session),
@@ -881,12 +884,12 @@ async function act(path, body) {
   return answer;
 }
 
-async function resumeSession(sessionId, how, confirmed) {
+async function resumeSession(sessionId, how, confirmed, task) {
   if (!sessionId) return;
-  const answer = await post("/api/resume", { session_id: sessionId, how: how, confirm: Boolean(confirmed) });
+  const answer = await post("/api/resume", { session_id: sessionId, how: how, confirm: Boolean(confirmed), task: task });
   if (!answer) return;
   if (answer.needs_confirm && !confirmed) {
-    askToContinue(answer.message, () => resumeSession(sessionId, how, true));
+    askToContinue(answer.message, () => resumeSession(sessionId, how, true, task));
     return;
   }
   toast(answer.message);
