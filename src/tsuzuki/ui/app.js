@@ -386,8 +386,13 @@ function load(name, url, force) {
         return false;
       }
       if (force && text === pane.html) return true;
+      // 取り直しの入れ替えで、左の列の入力欄（開いているもの）の入力を消さない。閉じたあとの取り直しで追いつく
+      if (force && name === "left" && pane.node.querySelector("form:not([hidden])")) return true;
+      const prepOpen = name === "detail" && force && pane.node.querySelector("details.prep[open]") !== null;
       pane.html = text;
       pane.node.innerHTML = text; // 断片はサーバーがエスケープ済み
+      const prep = prepOpen ? pane.node.querySelector("details.prep") : null;
+      if (prep) prep.open = true; // 開いていた「Claude で使う準備」は、取り直しの入れ替えでも開いたままにする
       afterSwap[name](Boolean(force));
       return true;
     } catch (error) {
@@ -532,6 +537,9 @@ const ACTIONS = {
   "form-cancel": (button) => cancelForm(button),
   "ticket-url-edit": () => openTicketUrl(),
   "tasks-root-edit": () => openTasksRoot(),
+  "tasks-readme": (button) => placeTasksReadme(button),
+  "task-prep": (button) => sendTask("/api/task-prep", { task: button.closest(".task-card").dataset.task,
+    item: button.dataset.item }),
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
   "task-trash": (button) => trashTask(button),
@@ -1054,6 +1062,7 @@ async function saveTicketUrl(form) {
   if (!answer) return;
   toast(answer.message);
   if (!answer.ok) return;
+  form.hidden = true; // 開いたままの入力欄があると、左の取り直しを見送る
   panes.left.url = null; // 同じ URL でも取り直す
   await reloadTasks();
 }
@@ -1096,6 +1105,25 @@ async function saveTasksRoot(form, confirm) {
   go({ task: "", d: "" }, false);
   await reloadTasks();
   for (const delay of [600, 1500, 3000]) setTimeout(pollStatus, delay);
+}
+
+// 「Claude で使う準備」の「決まりのファイル」の「置く」：置き場所に雛形から README.md を置く（あれば、サーバーが断る）。
+// 置けたらカードを取り直す（案内が消える）
+async function placeTasksReadme(button) {
+  if (busyWriting()) return;
+  writing = true;
+  button.disabled = true;
+  let answer;
+  try {
+    answer = await postWrite("/api/tasks-readme", {});
+  } finally {
+    writing = false;
+    button.disabled = false;
+  }
+  if (!answer) return;
+  toast(answer.message);
+  if (!answer.ok) return;
+  await reloadTasks();
 }
 
 // 入力欄の「やめる」：設定の欄（#task-settings）は、カードを取り直して元に戻す。ほかの欄は閉じる

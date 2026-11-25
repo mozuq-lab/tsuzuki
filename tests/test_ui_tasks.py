@@ -10,7 +10,8 @@ from tsuzuki.render import fmt_local
 from tsuzuki.retention import iso_utc
 from tsuzuki.tasks import STAGES, TaskFile, stage_label
 from tsuzuki.taskviews import TaskDetail, TaskFileItem, TaskRow, TaskSessionItem
-from tsuzuki.ui_tasks import at_reference, frag_new_task, frag_task_card, frag_task_settings, frag_task_filters, frag_task_list
+from tsuzuki.ui_tasks import (CardPrep, at_reference, frag_new_task, frag_task_card, frag_task_settings, frag_task_filters,
+                              frag_task_list)
 from tsuzuki.views import SessionRow
 from tests.fixtures import sid, t
 
@@ -25,7 +26,7 @@ EVIL_FILE = '<img src=x onerror=alert(1)>"\'&amp;.md'
 
 ALLOWED_TAGS = {"div", "span", "em", "h4", "button", "br", "p", "ul", "ol", "li", "pre", "code", "blockquote", "hr",
                 "table", "thead", "tbody", "tr", "th", "td", "strong", "a", "h1", "h2", "h3", "h5", "h6", "input",
-                "form", "label", "select", "option", "textarea"}
+                "form", "label", "select", "option", "textarea", "details", "summary"}
 ALLOWED_ATTRS = {"class", "id", "disabled", "title", "href", "rel", "target", "align", "start", "aria-label", "type",
                  "name", "value", "required", "maxlength", "placeholder", "autocomplete", "spellcheck", "rows", "hidden", "selected"}
 
@@ -236,13 +237,71 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertNotIn("リポジトリの Issue（GitHub）", shown)
         self.assertEqual(Markup(shown).tags_with("name", "url")[0][1]["value"], EVIL)
 
+    def card_prep(self, missing, **kw):
+        values = dict(start="~/dev/app", readme="~/tasks/README.md", rule_file="~/dev/app/CLAUDE.local.md",
+                      skills_dir="~/dev/app/.claude/skills", allow_file="~/dev/app/.claude/settings.local.json")
+        values.update(kw)
+        return frag_task_card(make_detail(), resume_default="vscode", prep=CardPrep(missing=tuple(missing), **values))
+
+    def test_card_prep_is_a_collapsed_list_between_the_fields_and_the_conversations(self):
+        html = self.card_prep(["allow", "skills", "rule", "readme"])
+        m = self.assertSafe(html)
+        details = m.tags_with("class", "prep")
+        self.assertEqual([t for t, _ in details], ["details"])
+        self.assertNotIn("open", details[0][1])
+        self.assertIn("<summary>Claude で使う準備：あと 4つ</summary>", html)
+        self.assertIn('<p class="prep-intro">このタスクの会話を始めるフォルダー（~/dev/app）に置きます。'
+                      'そこで始めた会話にだけ効き、ほかのプロジェクトの会話には効きません。</p>', html)
+        self.assertEqual(re.findall(r'<div class="prep-name">([^<]*)</div>', html),
+                         ["✗ 決まりのファイル", "✗ CLAUDE.local.md の決まり", "✗ スキル", "✗ 書き込みの許可"])
+        self.assertEqual(re.findall(r'<div class="prep-what">([^<]*)</div>', html), [
+            "~/tasks/README.md がありません",
+            "~/dev/app/CLAUDE.local.md に、タスクの決まりを読む文を足します",
+            "task-start・task-handoff を ~/dev/app/.claude/skills に置きます",
+            "~/dev/app/.claude/settings.local.json の additionalDirectories に、タスクの置き場所を足します"])
+        self.assertEqual(len(m.tags_with("data-action", "tasks-readme")), 1)
+        prep = m.tags_with("data-action", "task-prep")
+        self.assertEqual([a["data-item"] for _, a in prep], ["rule", "skills", "allow"])
+        self.assertEqual(re.findall(r'class="btn"[^>]*data-action="(?:tasks-readme|task-prep)"[^>]*>([^<]*)<', html),
+                         ["置く", "足す", "置く", "足す"])
+        self.assertLess(html.index("ブランチ・PR"), html.index('<details class="prep">'))
+        self.assertLess(html.index('<details class="prep">'), html.index('<div class="sec">会話'))
+
+    def test_card_prep_shows_only_what_is_missing_and_nothing_when_complete(self):
+        html = self.card_prep(["allow"])
+        self.assertIn("<summary>Claude で使う準備：あと 1つ</summary>", html)
+        self.assertEqual(html.count('<div class="prep-item">'), 1)
+        self.assertEqual(Markup(html).tags_with("data-action", "tasks-readme"), [])
+        self.assertNotIn('class="prep"', self.card_prep([]))
+        self.assertNotIn('class="prep"', frag_task_card(make_detail(), resume_default="vscode"))
+
+    def test_card_prep_note_is_one_escaped_line_without_items(self):
+        html = frag_task_card(make_detail(), resume_default="vscode", prep=CardPrep(missing=(), note=EVIL))
+        self.assertSafe(html)
+        self.assertNotIn(EVIL, html)
+        self.assertEqual(html.count('<p class="prep-intro">'), 1)
+        self.assertNotIn("prep-item", html)
+        self.assertNotIn("<details", html.split('class="prep"')[1].split("</div>")[0])
+
+    def test_card_prep_escapes_hostile_paths(self):
+        html = self.card_prep(["readme", "rule", "skills", "allow"], start=EVIL, readme=EVIL, rule_file=EVIL,
+                              skills_dir=EVIL, allow_file=EVIL)
+        self.assertSafe(html)
+        self.assertNotIn(EVIL, html)
+
+    def test_the_left_column_has_no_prep_block(self):
+        html = frag_task_filters({"open": 1}, [], status="open", place=None, shared_place=None,
+                                 tasks_root="/r", home=HOME, tasks_root_value="/r")
+        self.assertNotIn("prep", html)
+        self.assertNotIn("<details", html)
+        self.assertNotIn("Claude で使う準備", html)
+
     def test_tasks_root_section(self):
         counts = {"open": 1, "done": 0, "all": 1}
         for value in ("~/tasks", EVIL):
             with self.subTest(value):
                 html = frag_task_filters(counts, [], status="open", place=None, shared_place=None,
-                                         tasks_root=value, home=HOME, tasks_root_value=value,
-                                         tasks_root_notes=[(EVIL, None), (EVIL, EVIL)])
+                                         tasks_root=value, home=HOME, tasks_root_value=value)
                 m = self.assertSafe(html)
                 self.assertNotIn(EVIL, html)
                 self.assertIn("タスクの置き場所</div>", html)
@@ -254,9 +313,6 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
                 self.assertEqual((len(field), field[0][1]["value"], field[0][1]["placeholder"]),
                                  (1, value, "~/tasks"))
                 self.assertEqual(len(m.tags_with("data-action", "form-cancel")), 2)  # チケットの欄と、この欄
-                self.assertEqual(html.count('<div class="note">'), 2)
-                copies = m.tags_with("data-action", "copy")
-                self.assertEqual([a["data-copy"] for _, a in copies], [EVIL])
         plain = frag_task_filters(counts, [], status="open", place=None, shared_place=None,
                                   tasks_root=ROOT, home=HOME, tasks_root_value="~/tasks")
         self.assertIn("<span>~/tasks</span>", plain)  # ホームの下は ~ で出す

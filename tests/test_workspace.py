@@ -141,6 +141,14 @@ class EnsureSelfFirstTest(unittest.TestCase):
         path = self.write(json.dumps({"folders": [{"path": "../WS"}]}))
         self.assertEqual(ensure_self_first(path), "present")
 
+    def test_claude_config_dir_is_refused_in_another_case_spelling(self):
+        path = self.write('{"folders": [{"path": "app"}]}')
+        variant = os.path.join(str(self.dir.parent).swapcase(), self.dir.name, os.path.basename(path))
+        if not os.path.exists(variant):
+            self.skipTest("case-sensitive file system")
+        with self.assertRaises(WorkspaceError):
+            ensure_self_first(variant, claude_dir=self.dir.parent)
+
     def test_claude_config_dir_is_refused(self):
         text = '{"folders": [{"path": "app"}]}'
         path = self.write(text)

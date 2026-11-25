@@ -3,7 +3,8 @@
 書くのは「新しいタスクのフォルダーと task.md」と「既存の task.md の見出し情報の行と待っていることの欄」だけ。
 画面から変えるのは title / ticket / repo / workspace の行と、題が変わったときの本文の見出しだけ。
 あとは、頼まれたときにタスクのフォルダーをゴミ箱へ動かす（消さずに、動かすだけ）ことと、ほかの場所の資料を
-タスクのフォルダーの直下へコピーする（元は変えず、今あるファイルも上書きしない）こと。
+タスクのフォルダーの直下へコピーする（元は変えず、今あるファイルも上書きしない）こと、置き場所の直下に
+README.md がなければ雛形から置くこと（今あるファイルは上書きしない）。
 """
 import os
 import re
@@ -14,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from tsuzuki.pathguard import is_inside
 from tsuzuki.privacy import os_error_text
 from tsuzuki.tasks import _FENCE, _H1, _H2, STAGES, TASK_MD, is_task_dir_name, parse_task_md, task_title
 from tsuzuki.workspace import WorkspaceError, first_folder
@@ -84,9 +86,36 @@ def _refuse_claude_dir(tasks_root: Path, claude_dir: Optional[Path]) -> None:
     ~/.claude には書かない決まりの、書く直前の守り（config.resolve_tasks_root と同じ文言）。"""
     if claude_dir is None:
         return
-    real, claude = os.path.realpath(str(tasks_root)), os.path.realpath(str(claude_dir))
-    if real == claude or real.startswith(claude.rstrip("/") + "/"):
+    if is_inside(str(tasks_root), str(claude_dir)):
         raise TaskWriteError("タスクの置き場所に Claude Code の設定ディレクトリの中は使えません: %s" % tasks_root)
+
+
+def place_tasks_readme(tasks_root: Path, text: str, *, claude_dir: Optional[Path] = None) -> Path:
+    """置き場所の直下に README.md を新しく置く。今あるもの（シンボリックリンクも）は上書きせず、断る。"""
+    if not os.path.isdir(str(tasks_root)):
+        raise TaskWriteError("タスクの置き場所がありません: %s" % tasks_root)
+    _refuse_claude_dir(tasks_root, claude_dir)
+    path = Path(os.path.abspath(str(tasks_root))) / "README.md"
+    data = text.encode("utf-8")  # 開く前に（符号化の失敗で空のファイルを残さない）
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        raise TaskWriteError("README.md はもうあります。上書きはしません: %s" % path)
+    except OSError as e:
+        raise TaskWriteError("README.md を置けませんでした（%s）" % os_error_text(e, writing=True))
+    try:
+        try:
+            while data:
+                data = data[os.write(fd, data):]
+        finally:
+            os.close(fd)
+    except OSError as e:
+        try:
+            os.unlink(str(path))
+        except OSError:
+            pass
+        raise TaskWriteError("README.md を置けませんでした（%s）" % os_error_text(e, writing=True))
+    return path
 
 
 def create_task(tasks_root: Path, short_name: str, *, title: Optional[str] = None, ticket: Optional[str] = None,

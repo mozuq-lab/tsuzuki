@@ -23,15 +23,15 @@ Claude Code は既定では30日たった記録を消します（設定 `cleanup
 
 ## 読む物と書く物
 
-`~/.claude` は読むだけで、書き込みません。Tsuzuki が書くのは `~/.tsuzuki/` の中と、タスクの置き場所（`~/tasks`）の中の決まった所と、設定で決めたワークスペース（`.code-workspace`）の `folders` の先頭の1件だけです。画面で頼まれたとき、タスクのフォルダーをゴミ箱（`~/.Trash`、外付けのディスクならそのディスクの `.Trashes`）へ動かします。ほかに、`tsuzuki doctor --report` と `tsuzuki templates` が、指定された書き先に書きます。`tsuzuki vscode install` は、VS Code に拡張を1つ入れます（「VS Code のターミナルで再開する」）。タスクの置き場所に書く物は「タスク」の節にあります。
+`~/.claude` は読むだけで、書き込みません。Tsuzuki が書くのは `~/.tsuzuki/` の中と、タスクの置き場所（`~/tasks`）の中の決まった所と、設定で決めたワークスペース（`.code-workspace`）の `folders` の先頭の1件と、タスクのカードの「Claude で使う準備」のボタンを押したときの、そのタスクの会話を始めるフォルダーの中の決まったファイルだけです。画面で頼まれたとき、タスクのフォルダーをゴミ箱（`~/.Trash`、外付けのディスクならそのディスクの `.Trashes`）へ動かします。ほかに、`tsuzuki doctor --report` と `tsuzuki templates` が、指定された書き先に書きます。`tsuzuki vscode install` は、VS Code に拡張を1つ入れます（「VS Code のターミナルで再開する」）。タスクの置き場所に書く物は「タスク」の節にあります。
 
 | 読む物 | 何に使うか |
 |---|---|
 | `~/.claude/projects/*/*.jsonl` | セッションの記録（会話）。サブエージェントの記録は読みません |
 | `~/.claude/history.jsonl` | 入力履歴。設定 `index_history` を false にすると読みません |
 | `~/.claude/sessions/*.json` | 今動いているセッション。「実行中」の印と、再開の前の確認と、フックに使います |
-| `~/.claude/settings.json` | `tsuzuki doctor` がフックの設定を確かめるときと、タスクの画面の左の列が、タスクの置き場所の書き込みの許可を確かめるときに読みます |
-| `~/.claude/CLAUDE.md`、`~/.claude/skills/*/SKILL.md` | `tsuzuki doctor` と、タスクの画面の左の列が、タスクの決まりが書かれているか・スキルがあるかを確かめるときだけ読みます |
+| `~/.claude/settings.json` | `tsuzuki doctor` がフックの設定を確かめるときと、タスクの書き込みの許可を確かめるとき（`doctor` と、タスクのカードの「Claude で使う準備」）に読みます |
+| `~/.claude/CLAUDE.md`、`~/.claude/skills/*/SKILL.md` | `tsuzuki doctor` と、タスクのカードの「Claude で使う準備」が、タスクの決まりが書かれているか・スキルがあるかを確かめるときだけ読みます。会話を始めるフォルダーとその親の `CLAUDE.md`・`CLAUDE.local.md`・`.claude/CLAUDE.md`・`.claude/skills/` と、会話を始めるフォルダーの `.claude/settings.json`、そのフォルダー（Git のリポジトリならその一番上のフォルダー）の `.claude/settings.local.json` も、同じ確かめのために読みます |
 | 資料 | セッションが作った・直した・読んだ文書と、場所の中にある文書。拡張子が設定 `doc_extensions` にあるものだけです |
 
 `/tmp` などの一時領域にある文書は、資料に入れません。`~/.claude` の中で資料にするのは、`plans/*.md` と `projects/*/memory/*.md` だけです。本文を検索できるのは .md・.txt・.csv・.html などのテキストの資料で、PDF や Office の文書は一覧に出ても検索では見つかりません。
@@ -365,7 +365,17 @@ launchctl load ~/Library/LaunchAgents/local.tsuzuki.serve.plist
 
 Tsuzuki は `task.md` を読んで、画面の「タスク」に一覧とカードを出します。段階は `チケット`・`調査`・`調整`・`実装`・`PR`・`修正`・`完了` の7つです。セッションと資料はタスクに結び付き、カードに根拠とともに出ます。
 
-Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと `task.md`、既存の `task.md` の `stage`・`waiting`・`title`・`ticket`・`repo`・`workspace` の行と、本文の `## 待っていること` の欄、題を変えたときの本文の最初の `# 見出し` と、頼まれたときにコピーする資料のファイルだけです。ほかの本文は書き換えません。例外が1つあり、設定で新しいワークスペースを決めたとき（変えたときも）だけ、その `.code-workspace` の `folders` の先頭に `{ "path": "." }` を足します。コメントや字下げなどはそのままで、先頭にすでにあれば書きません。画面で頼まれたときは、タスクのフォルダーをゴミ箱へ動かします（消しません）。本文を書くのは、Claude（スキル）かあなたです。
+Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと `task.md`、既存の `task.md` の `stage`・`waiting`・`title`・`ticket`・`repo`・`workspace` の行と、本文の `## 待っていること` の欄、題を変えたときの本文の最初の `# 見出し` と、頼まれたときにコピーする資料のファイルと、タスクのカードの「Claude で使う準備」の「置く」を押したときの `<置き場所>/README.md`（なければ雛形から置き、今あるファイルは上書きしません）だけです。ほかの本文は書き換えません。例外が1つあり、設定で新しいワークスペースを決めたとき（変えたときも）だけ、その `.code-workspace` の `folders` の先頭に `{ "path": "." }` を足します。コメントや字下げなどはそのままで、先頭にすでにあれば書きません。画面で頼まれたときは、タスクのフォルダーをゴミ箱へ動かします（消しません）。本文を書くのは、Claude（スキル）かあなたです。
+
+タスクのカードの「Claude で使う準備」のボタンを押したときだけ、そのタスクの会話を始めるフォルダー（「導入」の手順3を見てください）に、次のファイルを書きます。ほかの物は書かず、今ある内容は消しません。リポジトリの中のこともあります。`~/.claude` の中には書きません。
+
+| ボタン | 書く物 |
+|---|---|
+| 「足す」（CLAUDE.local.md の決まり） | `CLAUDE.local.md` の末尾に、決まりの文（`tsuzuki templates` の `CLAUDE.md-snippet.md` と同じもの）を足します。なければ作ります。前から書いてある文は1バイトも変えません |
+| 「置く」（スキル） | `.claude/skills/task-start/SKILL.md` と `.claude/skills/task-handoff/SKILL.md`。すでにあるものは残します |
+| 「足す」（書き込みの許可） | `.claude/settings.local.json`（Git のリポジトリなら、その一番上のフォルダーのもの）の `permissions.additionalDirectories` に、タスクの置き場所を足します。なければ作ります。ほかの項目はそのままです。JSON として読めないときは書きません |
+
+どれも、シンボリックリンクと、書き込めないファイルには書かず、理由を出します。
 
 ### 導入
 
@@ -394,35 +404,33 @@ Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと 
    mkdir -p ~/tasks && cp ~/Downloads/tsuzuki-templates/tasks/README.md ~/tasks/README.md
    ```
 
-3. `CLAUDE.md-snippet.md` の中身を、`~/.claude/CLAUDE.md` の末尾に足します。ファイルがなければ作ります。
+   コピーする代わりに、タスクのカードの「Claude で使う準備」の「決まりのファイル」の「置く」を押しても、同じ雛形が置かれます（今ある `README.md` は上書きしません）。
 
-   ```sh
-   cat ~/Downloads/tsuzuki-templates/CLAUDE.md-snippet.md >> ~/.claude/CLAUDE.md
+3. タスクのカードで、Claude で使う準備を整えます。Tsuzuki の画面でタスクを選ぶと、カードのフィールド（チケット・ブランチ・PR）の下に、畳んだ「Claude で使う準備：あと N つ」が出ます（全部整っていれば出ません）。Claude にタスクを作らせたり、引き継ぎを書かせたりするための準備で、Tsuzuki の画面はこれがなくても使えます。
+
+   準備を置くのは `~/.claude` ではなく、そのタスクの**新しい会話を始めるフォルダー**です。そこで始めた会話にだけ効くので、ほかのプロジェクトの会話は変わりません。フォルダーは、タスクにワークスペースがあればそのファイルのあるフォルダー、なければタスクのリポジトリ、それもなければタスクのフォルダーです（「新しい会話」のボタンが会話を始める場所と同じです）。開くと、そのフォルダーと、まだ整っていない項目が並びます。
+
+   | 項目 | 押すと書く物 |
+   |---|---|
+   | 決まりのファイル | `<置き場所>/README.md`（手順2と同じ雛形。今あるファイルは上書きしません） |
+   | CLAUDE.local.md の決まり | 会話を始めるフォルダーの `CLAUDE.local.md` の末尾に、タスクの決まり（`<置き場所>/README.md` を読む文）を足します |
+   | スキル | 会話を始めるフォルダーの `.claude/skills/` に、`task-start` と `task-handoff` を置きます |
+   | 書き込みの許可 | 会話を始めるフォルダー（Git のリポジトリならその一番上のフォルダー）の `.claude/settings.local.json` の `permissions.additionalDirectories` に、タスクの置き場所の絶対パスを足します。これで、そこで始めた会話から、タスクのフォルダーに書き込めます（タスクの置き場所が会話を始めるフォルダーと同じか、その中にあるときは要りません）。足した後も、書き込みでは許可の確認が出ます |
+
+   「すでにある」かどうかは、Claude Code が読む場所で見ます。決まりの文は、そのフォルダーと親フォルダーの `CLAUDE.md`・`CLAUDE.local.md`・`.claude/CLAUDE.md` と `~/.claude/CLAUDE.md` に、置き場所の `README.md` のパスがあれば整っているとします。スキルは、そのフォルダーからリポジトリの一番上までの `.claude/skills/` と `~/.claude/skills/` を見ます。書き込みの許可は、`settings.local.json`・`.claude/settings.json`・`~/.claude/settings.json` を見ます。
+
+   `CLAUDE.local.md` と `.claude/settings.local.json` は、自分用のファイルです。リポジトリに入れたくなければ、Git の全体の除外（`~/.config/git/ignore`）に次の4行を足しておくと、どのリポジトリでも Git に出ません。
+
+   ```
+   CLAUDE.local.md
+   .claude/settings.local.json
+   .claude/skills/task-start/
+   .claude/skills/task-handoff/
    ```
 
-   同じ操作を2回すると同じ文が2回入るので、足したあとで中身を開いて確かめてください。
+   すべてのプロジェクトの会話に同じ決まりを効かせたいときは、従来どおり `~/.claude` に置くこともできます（任意）。手順1で書き出した `CLAUDE.md-snippet.md` の中身を `~/.claude/CLAUDE.md` の末尾に足し（同じ操作を2回すると同じ文が2回入ります）、`~/.claude/settings.json` の `permissions.additionalDirectories` に**絶対パス**でタスクの置き場所を足し（例 `"additionalDirectories": ["/Users/<名前>/tasks"]`）、スキル2つを `~/.claude/skills/` にコピーします。どちらの置き方でも、`tsuzuki doctor` と、カードの準備は整っているとみなします。
 
-4. `~/.claude/settings.json` の `permissions.additionalDirectories` に、タスクの置き場所を足します。これで、リポジトリで開いた会話から、タスクのフォルダーに書き込めます。**絶対パス**で書いてください。
-
-   ```json
-   {
-     "permissions": {
-       "additionalDirectories": ["/Users/<名前>/tasks"]
-     }
-   }
-   ```
-
-   すでに `permissions` や `additionalDirectories` があるときは、その中に足します。足した後も、タスクのフォルダーへの書き込みでは、リポジトリの中への書き込みと同じように許可の確認が出ます。確認なしで書けるようになるわけではありません。
-
-5. スキル2つを置きます。
-
-   ```sh
-   mkdir -p ~/.claude/skills && cp -R ~/Downloads/tsuzuki-templates/skills/task-start ~/Downloads/tsuzuki-templates/skills/task-handoff ~/.claude/skills/
-   ```
-
-   新しい会話から使えます。
-
-6. `tsuzuki doctor` で確かめます。
+4. `tsuzuki doctor` で確かめます。
 
    ```sh
    tsuzuki doctor
@@ -434,9 +442,9 @@ Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと 
    |---|---|
    | タスクの置き場所 | `~/tasks`（設定 `tasks_root`）があるか |
    | タスクの決まり（README.md） | `~/tasks/README.md` があるか |
-   | Claude Code の書き込みの許可 | `additionalDirectories` にタスクの置き場所があるか |
-   | スキル（task-start・task-handoff） | 2つのスキルが置いてあるか |
-   | CLAUDE.md の決まり | `~/.claude/CLAUDE.md` に `~/tasks/README.md` のパスがあるか |
+   | Claude Code の書き込みの許可 | `~/.claude/settings.json` の `additionalDirectories` にタスクの置き場所があるか（なくても ✔ で、「ありません」と出ます。タスクのカードから、会話を始めるフォルダーに置けます） |
+   | スキル（task-start・task-handoff） | `~/.claude/skills` に2つのスキルがあるか（同じく、なくても ✔） |
+   | CLAUDE.md の決まり | `~/.claude/CLAUDE.md` に `~/tasks/README.md` のパスがあるか（同じく、なくても ✔） |
 
    ⚠ や ✘ が出たら、その行の指示に従って直し、もう一度実行します。
 
@@ -492,7 +500,7 @@ Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと 
 
 タスクの置き場所は、画面の左の「タスクの置き場所」の「変える」から切り替えられます（`tasks_root` を書き換えるのと同じです）。Tsuzuki はフォルダーを動かしません。先に Finder などで動かしてください。いちばん簡単なのは、置き場所のフォルダー（`~/tasks` など）ごと動かす（名前を変える）ことです。入れるのは `/` か `~` で始まる、すでにあるフォルダーのパスです（ホームやボリュームの直下、Claude Code の設定ディレクトリの中は選べません）。今あるタスクが新しい置き場所に見つからないときは、「それらは一覧から消えます」と確かめてから切り替えます。手で足した・外した結び付けの記録は残るので、フォルダーを新しい置き場所に移せば元に戻ります（ゴミ箱に入れたときだけは、その記録も消えます）。切り替えるとすぐ、新しい置き場所のタスクと `shared/` を読み直します。同じ台帳で動いているこの版の Tsuzuki（アプリと、ターミナルやログイン時に起動した `tsuzuki serve` など）は、切り替えに1回の更新の間隔のうちに追いつきます。この変更より前の版は追いつかず、自分の置き場所で読み直し続けるので、切り替える前に終了するか、新しい版に入れ替えてください。
 
-Tsuzuki は `~/.claude` に書かないので、Claude Code 側の変更は左の列に案内だけを出します。`permissions.additionalDirectories` に新しい置き場所を足すこと、`CLAUDE.md` にその `README.md` のパスを書くこと（どちらも「コピー」ボタンで書く文字をコピーできます）、新しい置き場所に `README.md` を置くこと（なければ `tsuzuki templates` が書き出すものをコピーします）です。整っているかは `tsuzuki doctor` でも点検できます。
+Claude Code 側の準備は、タスクのカードの「Claude で使う準備：あと N つ」から整えます（「導入」の手順3）。ボタンを押したときだけ、そのタスクの会話を始めるフォルダーに書きます。
 
 ### 制約
 
@@ -511,6 +519,7 @@ Tsuzuki は `~/.claude` に書かないので、Claude Code 側の変更は左�
 - 外部へは通信しません。モデルを呼ばないので、トークンも消費しません。Claude の認証情報は読みません
 - 外部のコマンド（`open`、`osascript`、`ps`、`tsuzuki doctor` が使う `claude`）は、シェルを通さずに実行します
 - 拡張 Tsuzuki Terminal に渡す URI には、乱数の依頼の ID だけを載せます。実行するコマンドとフォルダーは、Tsuzuki が `~/.tsuzuki/vscode-requests/` に書いた依頼にだけあります。そのため、Web ページなどがこの URI を開いても、Tsuzuki が書いていない依頼は実行されません。拡張は依頼を読んだら消し、2分より古い依頼は使いません
+- タスクのカードの「Claude で使う準備」は、ボタンを押したときだけ、そのタスクの会話を始めるフォルダーの `CLAUDE.local.md`・`.claude/skills/task-start/`・`.claude/skills/task-handoff/`・`.claude/settings.local.json`（Git のリポジトリならその一番上のフォルダーのもの）だけに書きます。今ある内容は消さず、JSON として読めないファイル・シンボリックリンク・書き込めないファイル・`~/.claude` の中は断ります
 - タスクのゴミ箱への移動は、画面で頼まれたときだけ、置き場所の直下のタスクのフォルダー（`shared` と `.`・`_` で始まる名前を除く）に限って行います。消さずにゴミ箱へ動かし、置き場所の外や `~/.claude` の中は断ります
 - `.code-workspace` への `{ "path": "." }` の追加は、ワークスペースを新しく決めた・変えて保存したときだけ、その `folders` の先頭に1件足します。ほかのバイトは変えません。シンボリックリンク、読み取り専用のファイル、`~/.claude` の中のファイルには書かず、理由を出します
 - 要求の記録（アクセスログ）は書きません。URL に検索の語が入るためです。要求の処理に失敗したときだけ、例外の種類とコードの位置を1行、標準エラーに書きます
@@ -579,7 +588,7 @@ rm ~/.claude/projects/*/<ID>.jsonl
 
 Tsuzuki が足した `{ "path": "." }` の行は、あなたの `.code-workspace` に残ります。要らなければ手で消してください。
 
-Tsuzuki は `~/.claude` に何も書いていないので、ほかに片づける物はありません。
+Tsuzuki が足した `CLAUDE.local.md` の文、`.claude/skills/task-start/`・`.claude/skills/task-handoff/`、`.claude/settings.local.json` の `additionalDirectories` の1行は、タスクの会話を始めたフォルダーに残ります。要らなければ手で消してください。Tsuzuki は `~/.claude` に何も書いていないので、ほかに片づける物はありません。
 
 ## 困ったとき
 

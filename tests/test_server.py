@@ -1,11 +1,13 @@
 """画面のサーバー（server.py）と tsuzuki serve のテスト。合成した記録だけを使う。"""
 import contextlib
+import html
 import http.client
 import io
 import json
 import os
 import pkgutil
 import re
+import shutil
 import socket
 import sqlite3
 import stat
@@ -21,7 +23,7 @@ from urllib.parse import quote
 from tsuzuki import cli, documents, indexer, server, taskwrite
 from tsuzuki.config import Config, read_config, write_tasks_root
 from tsuzuki.indexer import update
-from tsuzuki.server import COOKIE, TICKET_URL_RESET, TOKEN_FILE, make_server, serve
+from tsuzuki.server import COOKIE, NO_TASKS_ROOT, TICKET_URL_RESET, TOKEN_FILE, make_server, serve
 from tsuzuki.tasks import parse_task_md
 from tsuzuki.taskwrite import CHANGED, TaskWriteError
 from tests.fixtures import FakeClaude, assistant, make_git_repo, make_ledger, sid, t, tool_result, user, write_file
@@ -1071,10 +1073,198 @@ class TaskServerTest(ServerCase):
         self.assertTrue(self.app._wake.is_set())
         shown = self.frag("/frag/task-filters")
         self.assertIn(new, shown)
-        self.assertIn('data-copy="%s"' % new, shown)  # Claude Code の書き込みの許可が、まだない
-        self.assertIn('data-copy="%s/README.md"' % new, shown)
+        self.assertNotIn("README.md がありません", shown)
         same = self.action("/api/tasks-root", {"path": new}).json()
         self.assertEqual((same["ok"], same["message"]), (True, "変わった所はありません"))
+
+    def test_tasks_readme_is_placed_once_from_the_template(self):
+        from tsuzuki.export import display_path, template_text
+        readme = os.path.join(self.tasks_root, "README.md")
+        self.app.cfg = Config(tasks_root=self.tasks_root)  # 点検は設定の置き場所を見る
+        self.assertIn('data-action="tasks-readme"', self.frag("/frag/task/2026-11-20-a"))
+        self.assertEqual(self.post("/api/tasks-readme", {}, cookie=True, origin=self.origin).status, 403)
+        self.assertFalse(os.path.exists(readme))
+        r = self.action("/api/tasks-readme", {}).json()
+        self.assertEqual((r["ok"], r["needs_confirm"]), (True, False), r)
+        shown = display_path(Path(self.tasks_root), self.home)
+        self.assertEqual(r["message"], "タスクの決まり（README.md）を置きました: %s/README.md" % shown)
+        with open(readme, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(text, template_text("templates/tasks-README.md", tasks_root_display=shown))
+        self.assertNotIn("~/tasks", text)  # 雛形の ~/tasks が、今の置き場所の表記になっている
+        self.assertIn(shown + "/shared/", text)
+        self.assertNotIn('data-action="tasks-readme"', self.frag("/frag/task/2026-11-20-a"))
+        again = self.action("/api/tasks-readme", {}).json()
+        self.assertFalse(again["ok"])
+        self.assertIn("README.md はもうあります", again["message"])
+        with open(readme, encoding="utf-8") as f:
+            self.assertEqual(f.read(), text)
+
+    def test_the_left_column_has_no_prep_block(self):
+        left = self.frag("/frag/task-filters")
+        self.assertNotIn("prep", left)
+        self.assertNotIn("Claude で使う準備", left)
+
+    def card_prep(self, task="2026-11-20-a"):
+        """カードの「Claude で使う準備」の（項目の名前、説明、ボタンの項目）の並びと、まとめの文。"""
+        card = self.frag("/frag/task/" + quote(task))
+        names = re.findall(r'<div class="prep-name">✗ ([^<]*)</div>', card)
+        whats = [html.unescape(w) for w in re.findall(r'<div class="prep-what">([^<]*)</div>', card)]
+        items = re.findall(r'<details class="prep"><summary>([^<]*)</summary>', card)
+        return card, names, whats, items
+
+    def test_task_card_prep_lists_what_the_start_folder_lacks_and_each_button_places_it(self):
+        from tsuzuki.export import display_path, template_text
+        card, names, whats, summary = self.card_prep()
+        proj, root = self.proj, self.tasks_root
+        self.assertEqual(summary, ["Claude で使う準備：あと 4つ"])
+        self.assertEqual(names, ["決まりのファイル", "CLAUDE.local.md の決まり", "スキル", "書き込みの許可"])
+        self.assertEqual(whats, ["%s/README.md がありません" % root,
+                                 "%s/CLAUDE.local.md に、タスクの決まりを読む文を足します" % proj,
+                                 "task-start・task-handoff を %s/.claude/skills に置きます" % proj,
+                                 "%s/.claude/settings.local.json の additionalDirectories に、タスクの置き場所を足します"
+                                 % proj])
+        self.assertIn("このタスクの会話を始めるフォルダー（%s）に置きます" % proj, html.unescape(card))
+        self.assertIn('data-action="tasks-readme"', card)
+        self.assertLess(card.index("ブランチ・PR"), card.index('<details class="prep">'))
+        self.assertLess(card.index('<details class="prep">'), card.index(">会話 <") if ">会話 <" in card else len(card))
+        shown = display_path(Path(root), self.home)
+        # 置く前の確認：許可していない送信元は 403
+        self.assertEqual(self.post("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}, cookie=True,
+                                   origin=self.origin).status, 403)
+        self.assertFalse(os.path.exists(os.path.join(proj, "CLAUDE.local.md")))
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
+        self.assertEqual((r["ok"], r["needs_confirm"], r["message"]),
+                         (True, False, "%s/CLAUDE.local.md に決まりの文を足しました" % proj), r)
+        with open(os.path.join(proj, "CLAUDE.local.md"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), template_text("templates/claude-md-snippet.md", tasks_root_display=shown))
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "skills"}).json()
+        self.assertEqual((r["ok"], r["message"]), (True, "%s/.claude/skills にスキルを置きました" % proj), r)
+        self.assertTrue(os.path.isfile(os.path.join(proj, ".claude", "skills", "task-handoff", "SKILL.md")))
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "allow"}).json()
+        self.assertEqual((r["ok"], r["message"]),
+                         (True, "%s/.claude/settings.local.json の additionalDirectories にタスクの置き場所を足しました"
+                          % proj), r)
+        with open(os.path.join(proj, ".claude", "settings.local.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"permissions": {"additionalDirectories": [root]}})
+        self.assertEqual(self.card_prep()[2], ["%s/README.md がありません" % root])
+        self.action("/api/tasks-readme", {})
+        card, names, _, summary = self.card_prep()
+        self.assertEqual((names, summary), ([], []))
+        self.assertNotIn("prep", card)
+        again = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
+        self.assertEqual((again["ok"], again["message"]), (True, "もう整っています"))
+
+    def test_task_card_prep_for_a_task_without_a_repo_uses_the_task_folder(self):
+        folder = os.path.join(self.tasks_root, "2026-11-22-ログイン")
+        card, names, whats, summary = self.card_prep("2026-11-22-ログイン")
+        self.assertEqual(summary, ["Claude で使う準備：あと 4つ"])
+        self.assertIn("%s/CLAUDE.local.md に" % folder, whats[1])
+        r = self.action("/api/task-prep", {"task": "2026-11-22-ログイン", "item": "allow"}).json()
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(os.path.isfile(os.path.join(folder, ".claude", "settings.local.json")))
+
+    def test_task_card_prep_follows_the_workspace_folder(self):
+        ws_dir = os.path.join(self.root, "ws")
+        os.makedirs(ws_dir)
+        ws = os.path.join(ws_dir, "x.code-workspace")
+        write_file(ws, json.dumps({"folders": [{"path": "."}]}))
+        write_file(self.task_md, (TASK_MD % self.proj).replace("repo:", "workspace: %s\nrepo:" % ws, 1))
+        self.reindex(tasks_root=Path(self.tasks_root))
+        _, _, whats, _ = self.card_prep()
+        self.assertIn("%s/CLAUDE.local.md に" % ws_dir, whats[1])
+
+    def test_task_prep_skills_keep_an_existing_one_and_refusals_say_why(self):
+        write_file(os.path.join(self.proj, ".claude", "skills", "task-handoff", "SKILL.md"), "自分の")
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "skills"}).json()
+        self.assertEqual((r["ok"], r["message"]), (
+            True, "%s/.claude/skills にスキルを置きました（task-handoff は前からあるので残しました）" % self.proj))
+        write_file(os.path.join(self.proj, ".claude", "settings.local.json"), "{broken")
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "allow"}).json()
+        self.assertFalse(r["ok"])
+        self.assertIn("JSON として読めない", r["message"])
+        with open(os.path.join(self.proj, ".claude", "settings.local.json"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "{broken")
+        self.assertFalse(self.action("/api/task-prep", {"task": "nope", "item": "rule"}).json()["ok"])
+        for item in ("readme", "", "nope"):  # 知らない項目は、答えの ok が false（400 ではない）
+            r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": item}).json()
+            self.assertEqual((r["ok"], r["message"]), (False, "準備の項目が正しくありません"))
+        for body in ({"task": "2026-11-20-a", "item": 5}, {"task": "2026-11-20-a"}, {"item": "rule"}):
+            self.assertEqual(self.action("/api/task-prep", body).status, 400, body)
+        self.app.tasks_root = None
+        self.assertFalse(self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()["ok"])
+
+    def test_task_prep_unreadable_places_never_make_a_500(self):
+        with mock.patch("tsuzuki.taskprep.check", side_effect=PermissionError(13, "Permission denied")):
+            card = self.get("/frag/task/2026-11-20-a", cookie=True)
+            self.assertEqual(card.status, 200)
+            self.assertNotIn("prep", card.body)
+            r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"})
+            self.assertEqual(r.status, 200)
+            self.assertFalse(r.json()["ok"])
+            self.assertIn("Permission denied", r.json()["message"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root は読めてしまう")
+    def test_task_prep_with_an_unreadable_dot_claude_still_answers(self):
+        dot = os.path.join(self.proj, ".claude")
+        os.makedirs(dot)
+        os.chmod(dot, 0)
+        self.addCleanup(os.chmod, dot, 0o755)
+        self.assertEqual(self.get("/frag/task/2026-11-20-a", cookie=True).status, 200)
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "skills"})
+        self.assertEqual(r.status, 200)
+        self.assertFalse(r.json()["ok"])
+
+    def test_task_prep_skills_never_land_in_the_claude_dir_through_a_link(self):
+        claude_skill = os.path.join(str(self.app.claude_dir), "skills", "task-start")
+        os.makedirs(claude_skill)
+        os.makedirs(os.path.join(self.proj, ".claude", "skills"))
+        os.symlink(claude_skill, os.path.join(self.proj, ".claude", "skills", "task-start"))
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "skills"}).json()
+        self.assertFalse(r["ok"], r)
+        self.assertEqual(os.listdir(claude_skill), [])
+
+    def test_task_prep_for_a_task_that_starts_in_home_shows_one_line_and_refuses(self):
+        write_file(self.task_md, TASK_MD % self.home)
+        self.reindex(tasks_root=Path(self.tasks_root))
+        card = self.frag("/frag/task/2026-11-20-a")
+        self.assertIn("このタスクの会話はホーム（またはディスクの根）で始まるので、ここには置きません。"
+                      "リポジトリかワークスペースを決めてください", card)
+        self.assertNotIn("prep-item", card)
+        self.assertNotIn("task-prep", card)
+        for item in ("rule", "skills", "allow"):
+            r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": item}).json()
+            self.assertFalse(r["ok"])
+            self.assertIn("ホーム（またはディスクの根）で始まる", r["message"])
+        self.assertEqual(os.listdir(self.home), [])
+
+    def test_task_prep_refuses_a_start_folder_inside_the_claude_dir(self):
+        inside = os.path.join(str(self.app.claude_dir), "work")
+        os.makedirs(inside)
+        write_file(self.task_md, (TASK_MD % inside))
+        self.reindex(tasks_root=Path(self.tasks_root))
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
+        self.assertFalse(r["ok"])
+        self.assertFalse(os.path.exists(os.path.join(inside, "CLAUDE.local.md")))
+
+    def test_tasks_readme_refusals(self):
+        r = self.action("/api/tasks-readme", {}).json()  # 設定の置き場所があるので、まず通る形を確かめる
+        self.assertTrue(r["ok"], r)
+        os.remove(os.path.join(self.tasks_root, "README.md"))
+        shutil.rmtree(self.tasks_root)
+        gone = self.action("/api/tasks-readme", {}).json()
+        self.assertFalse(gone["ok"])
+        self.assertIn("タスクの置き場所がありません", gone["message"])
+        inside = self.fake.dir / "tasks"
+        inside.mkdir(parents=True, exist_ok=True)
+        self.app.tasks_root = inside
+        refused = self.action("/api/tasks-readme", {}).json()
+        self.assertFalse(refused["ok"])
+        self.assertIn("Claude Code の設定ディレクトリ", refused["message"])
+        self.assertFalse((inside / "README.md").exists())
+        self.app.tasks_root = None
+        none = self.action("/api/tasks-readme", {}).json()
+        self.assertEqual((none["ok"], none["message"]), (False, NO_TASKS_ROOT))
 
     def test_tasks_root_asks_before_switching_to_a_root_without_the_tasks(self):
         new = os.path.join(self.root, "empty")

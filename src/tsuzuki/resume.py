@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional
 
 from tsuzuki.config import Config
 from tsuzuki.sources.live import LiveSession
+from tsuzuki.taskstart import start_dir
 from tsuzuki.tasks import TASK_MD, at_reference
 from tsuzuki.vscode_ext import NOT_INSTALLED, VSCodeTerminal
 
@@ -244,7 +245,7 @@ def start_conversation(conn: sqlite3.Connection, task: str, how: str, *, cfg: Co
     if row is None:
         return ActionOutcome(False, False, "台帳にないタスクです")
     task_dir, repo = row[0] or "", row[1]
-    cwd = repo if repo and isdir(repo) else task_dir
+    cwd = start_dir(task_dir, repo, None, isdir=isdir)
     if not cwd or not isdir(cwd):
         return ActionOutcome(False, False, "作業ディレクトリが見つかりません: %s" % cwd)
     prompt = conversation_prompt(cfg.new_conversation_prompt, os.path.join(task_dir, TASK_MD))
@@ -255,7 +256,7 @@ def start_conversation(conn: sqlite3.Connection, task: str, how: str, *, cfg: Co
             return missing
         window = workspace
         if how != "vscode":
-            cwd = os.path.dirname(workspace)
+            cwd = start_dir(task_dir, repo, workspace, isdir=isdir)
     if how == "copy":
         return ActionOutcome(True, False, "コマンドをコピーしました", new_conversation_command(cwd, prompt))
     if how == "vscode":

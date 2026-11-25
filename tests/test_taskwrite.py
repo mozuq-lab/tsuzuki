@@ -8,13 +8,13 @@ from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
 
-from tsuzuki.privacy import PRIVACY_HINT
+from tsuzuki.privacy import PRIVACY_HINT, WRITE_HINT
 from tsuzuki.tasks import parse_task_md
 from tsuzuki import taskwrite
 from tsuzuki.taskwrite import (ALREADY_IN_TASK, BAD_SECTION_LINE, CANNOT_COPY, NOT_A_COPY_TARGET, NOT_A_FILE, CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
                               find_trash, normalize_short_name, normalize_ticket, render_task_md, section_text,
                               set_fields, set_waiting, trash_task, BAD_WORKSPACE, normalize_workspace,
-                              replace_heading, update_settings, copy_into_task)
+                              replace_heading, update_settings, copy_into_task, place_tasks_readme)
 from tests.fixtures import allow_system_tmp, run_cli
 
 TEMPLATE = (
@@ -92,6 +92,14 @@ class ClaudeDirGuardTest(_TmpCase):
     def test_create_task_refuses_symlinked_root(self):
         with self.assertRaises(TaskWriteError):
             create_task(self.link, "login", title="x", now=datetime(2026, 11, 22, 10, 0), claude_dir=self.claude)
+        self.assertEqual(list((self.claude / "inside").iterdir()), [])
+
+    def test_create_task_refuses_a_case_variant_spelling_of_the_claude_dir(self):
+        variant = self.base / "CFG" / ".Claude" / "inside"
+        if not variant.exists():
+            self.skipTest("case-sensitive file system")
+        with self.assertRaises(TaskWriteError):
+            create_task(variant, "login", title="x", now=datetime(2026, 11, 22, 10, 0), claude_dir=self.claude)
         self.assertEqual(list((self.claude / "inside").iterdir()), [])
 
     def test_set_fields_refuses_symlinked_root(self):
@@ -676,6 +684,55 @@ class TrashTest(_TmpCase):
             self.assertEqual(find_trash(str(volume / "tasks" / "x"), str(home)),
                              str(volume / ".Trashes" / str(os.getuid())))
             self.assertIsNone(find_trash(str(bare / "tasks"), str(home)))
+
+
+class PlaceReadmeTest(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.root.mkdir()
+
+    def test_places_the_text(self):
+        path = place_tasks_readme(self.root, "# 決まり\n")
+        self.assertEqual(path, self.root / "README.md")
+        self.assertEqual(path.read_text(encoding="utf-8"), "# 決まり\n")
+
+    def test_refuses_an_existing_file(self):
+        (self.root / "README.md").write_text("自分の決まり\n", encoding="utf-8")
+        with self.assertRaises(TaskWriteError) as cm:
+            place_tasks_readme(self.root, "new")
+        self.assertIn("README.md はもうあります。上書きはしません", str(cm.exception))
+        self.assertEqual((self.root / "README.md").read_text(encoding="utf-8"), "自分の決まり\n")
+
+    def test_refuses_a_symlink_and_leaves_its_target(self):
+        target = self.base / "elsewhere.md"
+        target.write_text("元\n", encoding="utf-8")
+        (self.root / "README.md").symlink_to(target)
+        with self.assertRaises(TaskWriteError):
+            place_tasks_readme(self.root, "new")
+        self.assertEqual(target.read_text(encoding="utf-8"), "元\n")
+
+    def test_refuses_a_missing_root(self):
+        with self.assertRaises(TaskWriteError) as cm:
+            place_tasks_readme(self.base / "none", "x")
+        self.assertIn("タスクの置き場所がありません", str(cm.exception))
+
+    def test_refuses_the_claude_dir(self):
+        with self.assertRaises(TaskWriteError):
+            place_tasks_readme(self.root, "x", claude_dir=self.base)
+        self.assertFalse((self.root / "README.md").exists())
+
+    def test_unencodable_text_leaves_no_file(self):
+        with self.assertRaises(UnicodeEncodeError):
+            place_tasks_readme(self.root, "\ud800")
+        self.assertFalse((self.root / "README.md").exists())
+
+    def test_write_failure_leaves_no_file_and_gives_the_hint(self):
+        with mock.patch("tsuzuki.taskwrite.os.write", side_effect=PermissionError(errno.EPERM, "Operation not permitted")):
+            with self.assertRaises(TaskWriteError) as cm:
+                place_tasks_readme(self.root, "x")
+        self.assertIn("README.md を置けませんでした", str(cm.exception))
+        self.assertIn(WRITE_HINT, str(cm.exception))
+        self.assertFalse((self.root / "README.md").exists())
 
 
 class CliTest(_TmpCase):

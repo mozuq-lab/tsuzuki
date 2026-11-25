@@ -25,7 +25,7 @@ MAKE_DEMO = ROOT / "scripts" / "make_demo.py"
 ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans", "open-doc", "open-place", "docs",
            "fold", "read-more", "task-stage", "task-waiting", "task-settings", "copy-picked", "task-unlink", "task-conversation",
            "new-task", "task-open", "task-link", "task-trash", "task-copy-doc", "form-cancel", "ticket-url-edit",
-           "tasks-root-edit"}
+           "tasks-root-edit", "tasks-readme", "task-prep"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
 HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く
@@ -186,6 +186,39 @@ class UiAssetsTest(unittest.TestCase):
         # 見た目は class と hidden で切り替える（style 属性は CSP で止まる）
         self.assertNotIn(".style", js)
         self.assertNotIn("setAttribute(\"style\"", js)
+
+    def test_script_places_the_task_prep_and_keeps_the_card_prep_open(self):
+        js = _asset("app.js")
+        self.assertIn('"task-prep": (button) => sendTask("/api/task-prep"', js)
+        action = js[js.index('"task-prep":'):js.index('"task-prep":') + 220]
+        self.assertIn("button.dataset.item", action)
+        self.assertIn('button.closest(".task-card").dataset.task', action)
+        load = js[js.index("function load(name, url, force)"):js.index("function failPane")]
+        keep = load[load.index("const prepOpen"):load.index("pane.node.innerHTML = text")]
+        self.assertIn('name === "detail" && force', keep)  # カードの取り直しだけ、開いた準備を保つ
+        self.assertNotIn('"left"', keep)
+
+    def test_left_swap_keeps_the_open_forms_and_the_card_swap_keeps_the_prep_open(self):
+        js = _asset("app.js")
+        load = js[js.index("function load(name, url, force)"):js.index("function failPane")]
+        self.assertIn('querySelector("details.prep[open]")', load)
+        self.assertIn("prep.open = true", load)
+        self.assertLess(load.index('details.prep[open]'), load.index("pane.node.innerHTML = text"))
+        self.assertLess(load.index("prep.open = true"), load.index("afterSwap[name]"))
+        skip = load.index('querySelector("form:not([hidden])")')
+        self.assertIn('force && name === "left"', load[skip - 60:skip])
+        self.assertLess(skip, load.index("pane.html = text"))  # 入れ替えない取り直しは pane.html を変えない
+        self.assertIn("form.hidden = true", js[js.index("async function saveTicketUrl"):js.index("function openTasksRoot")])
+
+    def test_script_places_the_tasks_readme(self):
+        js = _asset("app.js")
+        self.assertIn('"tasks-readme": (button) => placeTasksReadme(button)', js)
+        place = _function(js, "placeTasksReadme")
+        self.assertIn("busyWriting()", place)
+        self.assertIn('postWrite("/api/tasks-readme"', place)
+        self.assertIn("toast(answer.message)", place)
+        self.assertNotIn("panes.left", place)
+        self.assertIn("reloadTasks()", place)
 
     def test_script_changes_the_tasks_root_with_a_confirmation(self):
         js = _asset("app.js")
@@ -553,20 +586,25 @@ class TaskViewAssetsTest(unittest.TestCase):
 
     def test_every_class_of_the_task_fragments_has_a_style(self):
         # ui_tasks の断片が使う class はすべて app.css に見た目がある（見本の A に合わせる）
-        from tsuzuki.ui_tasks import frag_new_task, frag_task_card, frag_task_filters, frag_task_list
+        from tsuzuki.ui_tasks import CardPrep, frag_new_task, frag_task_card, frag_task_filters, frag_task_list
         from tests.test_ui_tasks import file_item, make_detail, make_row
         rows = [make_row(live=True, pr_numbers=["24"]), make_row(name="b", status="waiting", ticket=None),
                 make_row(name="c", status="done", stage="完了")]
         detail = make_detail(stage="PR", stage_from_pr=True, after=("その後の要約", "2026-11-21T09:00:00Z"),
                              folder_cut=True, warnings=["task.md に現在地がありません", "段階の値を読めません: x"])
         detail.folder_files.append(file_item("/Users/me/tasks/2026-11-20-a/gone.md", missing=True))
-        fragments = (frag_task_filters({"open": 2}, [(3, "web-app", 2)], status="open", place=None, shared_place=7),
+        fragments = (frag_task_filters({"open": 2}, [(3, "web-app", 2)], status="open", place=None, shared_place=7,
+                                       tasks_root="/Users/me/tasks"),
                      frag_task_list(rows, selected="b", status="all"),
-                     frag_task_card(detail, resume_default="vscode"), frag_new_task([("/r", "r")]))
+                     frag_task_card(detail, resume_default="vscode", prep=CardPrep(
+                         missing=("readme", "rule", "skills", "allow"), start="~/dev/app", readme="~/tasks/README.md",
+                         rule_file="~/dev/app/CLAUDE.local.md", skills_dir="~/dev/app/.claude/skills",
+                         allow_file="~/dev/app/.claude/settings.local.json")), frag_new_task([("/r", "r")]))
         parser = _Tags()
         parser.feed("".join(fragments))
         classes = {c for _, attrs in parser.tags for c in (attrs.get("class") or "").split()}
-        self.assertTrue({"task-card", "stp", "chip", "pick", "cp", "new-task"} <= classes)
+        self.assertTrue({"task-card", "stp", "chip", "pick", "cp", "new-task", "prep", "prep-intro", "prep-item",
+                         "prep-name", "prep-what", "prep-btns"} <= classes)
         css = _asset("app.css")
         for cls in sorted(classes):
             self.assertRegex(css, r"\.%s(?![\w-])" % re.escape(cls), "app.css に .%s の見た目がない" % cls)

@@ -568,7 +568,16 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 .arrow { font-size: 10px; color: var(--text-tertiary); }
 .steps .btn { margin-left: .6rem; }
 .note { font-size: 11px; color: var(--text-tertiary); }
-#left > .note { padding: .2rem .9rem; }
+/* タスクのカードの「Claude で使う準備」（畳んである一覧） */
+.prep { padding: .5rem .9rem .2rem; }
+.prep > summary { font-size: 12px; cursor: pointer; }
+.prep-intro, .prep-what { font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.prep-intro { margin: .4rem 0 .2rem; }
+.prep-item { margin-top: .55rem; }
+.prep-name { font-size: 12px; }
+.prep-what { margin-top: .1rem; }
+.prep-btns { margin-top: .3rem; display: flex; gap: .4rem; }
+.task-card .prep { padding: .6rem 0 .2rem; }
 /* 待ちにする・待ちを解くときの、待っていることの入力欄（初めは hidden） */
 .waiting-form { margin: .45rem 0 .2rem; }
 .waiting-form[hidden] { display: none; }

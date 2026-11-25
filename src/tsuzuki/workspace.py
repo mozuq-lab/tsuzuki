@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from tsuzuki.pathguard import is_inside
 from tsuzuki.privacy import os_error_text
 
 
@@ -182,8 +183,7 @@ def ensure_self_first(path: str, *, claude_dir: Optional[Path] = None) -> str:
     if os.path.islink(path):
         raise WorkspaceError("シンボリックリンクのワークスペースには足せません")
     if claude_dir is not None:
-        real, claude = os.path.realpath(path), os.path.realpath(str(claude_dir))
-        if real == claude or real.startswith(claude.rstrip(os.sep) + os.sep):
+        if is_inside(path, str(claude_dir)):
             raise WorkspaceError("Claude Code の設定ディレクトリの中のワークスペースには足せません")
     try:
         st = os.stat(path)

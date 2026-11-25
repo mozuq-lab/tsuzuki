@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from tsuzuki import __version__
 from tsuzuki.config import Config, ConfigError, resolve_tasks_root
+from tsuzuki.export import display_path
 from tsuzuki.indexer import discover_transcripts
 from tsuzuki.sources.transcript import iter_lines, record_type
 from tsuzuki.store import LEDGER_FILENAME, get_meta, has_trigram, open_ledger
@@ -211,7 +212,6 @@ def _additional_dirs_ok(settings_path: Path, root: Path, home: str) -> bool:
 
 def _claude_md_ok(claude_md: Path, root: Path, home: str) -> bool:
     """CLAUDE.md に、置き場所の README.md のパス（~/… の形か絶対パス）があるか。"""
-    from tsuzuki.export import display_path
     try:
         text = Path(claude_md).read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -240,7 +240,7 @@ def task_report(cfg: Config, *, claude_dir: Path, home: str) -> Dict[str, Any]:
     return _task_facts(cfg, claude_dir, home)[2]
 
 
-# タスクの点検の名前（tsuzuki doctor に出る。画面の案内も、名前でどの点検かを見分ける）
+# タスクの点検の名前（tsuzuki doctor に出る）
 CHECK_ROOT, CHECK_README, CHECK_ALLOW, CHECK_SKILLS, CHECK_CLAUDE_MD = (
     "タスクの置き場所", "タスクの決まり（README.md）", "Claude Code の書き込みの許可",
     "スキル（task-start・task-handoff）", "CLAUDE.md の決まり")
@@ -263,14 +263,16 @@ def task_checks(cfg: Config, *, claude_dir: Path, home: str) -> List[Check]:
         checks.append(Check(names[0], "ok", str(root)))
     checks.append(Check(names[1], "ok", "あります") if f["readme"]
                   else Check(names[1], "warn", "%s がありません" % (root / "README.md")))
+    # この3つは、~/.claude になくてもよい（タスクのカードの「Claude で使う準備」が、会話を始めるフォルダーに置く）
+    where = display_path(claude_dir, home)
+    hint = "（タスクのカードの「Claude で使う準備」から、会話を始めるフォルダーに置けます）"
     checks.append(Check(names[2], "ok", "設定済み") if f["additional_dirs"]
-                  else Check(names[2], "warn", "%s の permissions.additionalDirectories にタスクの置き場所がありません"
-                             % (claude_dir / "settings.json")))
+                  else Check(names[2], "ok", "%s/settings.json にはありません%s" % (where, hint)))
     missing = [n for n in TASK_SKILLS if not f["skills"][n]]
     checks.append(Check(names[3], "ok", "2つともあります") if not missing
-                  else Check(names[3], "warn", "ありません: %s" % "、".join(missing)))
+                  else Check(names[3], "ok", "%s/skills にはありません: %s%s" % (where, "、".join(missing), hint)))
     checks.append(Check(names[4], "ok", "書かれています") if f["claude_md"]
-                  else Check(names[4], "warn", "%s にタスクの README.md のパスがありません" % (claude_dir / "CLAUDE.md")))
+                  else Check(names[4], "ok", "%s/CLAUDE.md にはありません%s" % (where, hint)))
     return checks
 
 

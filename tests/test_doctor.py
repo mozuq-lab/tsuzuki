@@ -14,6 +14,7 @@ from unittest import mock
 
 from tsuzuki import cli, doctor
 from tsuzuki.config import Config
+from tsuzuki.export import display_path
 from tsuzuki.doctor import Check, build_report, hook_configured, run_checks, task_checks, task_report
 from tsuzuki.indexer import update
 from tsuzuki.store import LEDGER_FILENAME, set_meta
@@ -355,35 +356,50 @@ class TaskChecksTest(DoctorTestBase):
     def checks(self):
         return {c.name: c.status for c in task_checks(self.cfg, claude_dir=self.claude, home=self.home)}
 
+    def details(self):
+        return {c.name: c.detail for c in task_checks(self.cfg, claude_dir=self.claude, home=self.home)}
+
     def test_all_missing(self):
         checks = self.checks()
-        self.assertEqual(set(checks.values()), {"warn"})
         self.assertEqual(len(checks), 5)
+        # 置き場所と README は、なければ ⚠。~/.claude の3つは、なくてもよい（カードの準備が会話を始めるフォルダーに置く）
+        self.assertEqual({n: s for n, s in checks.items() if s == "warn"},
+                         {"タスクの置き場所": "warn", "タスクの決まり（README.md）": "warn"})
+        details = self.details()
+        where = display_path(self.claude, self.home)
+        hint = "（タスクのカードの「Claude で使う準備」から、会話を始めるフォルダーに置けます）"
+        self.assertEqual(details["Claude Code の書き込みの許可"], "%s/settings.json にはありません%s" % (where, hint))
+        self.assertEqual(details["スキル（task-start・task-handoff）"],
+                         "%s/skills にはありません: task-start、task-handoff%s" % (where, hint))
+        self.assertEqual(details["CLAUDE.md の決まり"], "%s/CLAUDE.md にはありません%s" % (where, hint))
 
     def test_all_present(self):
         self.install()
         self.assertEqual(set(self.checks().values()), {"ok"})
+        self.assertEqual(self.details()["Claude Code の書き込みの許可"], "設定済み")
+        self.assertEqual(self.details()["スキル（task-start・task-handoff）"], "2つともあります")
+        self.assertEqual(self.details()["CLAUDE.md の決まり"], "書かれています")
 
     def test_absolute_path_in_claude_md_and_ancestor_dir(self):
         self.install(claude_md="%s/README.md" % self.tasks, dirs=["~"])
         self.assertEqual(set(self.checks().values()), {"ok"})
 
-    def test_unrelated_dir_and_broken_files_warn(self):
+    def test_unrelated_dir_and_broken_files_say_missing(self):
         self.install(claude_md="何もなし", dirs=[str(self.root / "other")])
-        checks = self.checks()
-        self.assertEqual(checks["Claude Code の書き込みの許可"], "warn")
-        self.assertEqual(checks["CLAUDE.md の決まり"], "warn")
+        details = self.details()
+        self.assertIn("にはありません", details["Claude Code の書き込みの許可"])
+        self.assertIn("にはありません", details["CLAUDE.md の決まり"])
         (self.claude / "settings.json").write_text("{broken", encoding="utf-8")
-        self.assertEqual(self.checks()["Claude Code の書き込みの許可"], "warn")
+        self.assertIn("にはありません", self.details()["Claude Code の書き込みの許可"])
 
     def test_additional_directories_must_be_a_list(self):
         # 文字列や辞書は、1文字ずつ（キーごとに）見ると "/" がすべてを含んでしまう。リストでなければ ⚠
         for dirs in ("/", str(self.tasks), {"/": True}, {str(self.tasks): True}):
             with self.subTest(dirs=dirs):
                 self.install(dirs=dirs)
-                self.assertEqual(self.checks()["Claude Code の書き込みの許可"], "warn")
+                self.assertIn("にはありません", self.details()["Claude Code の書き込みの許可"])
         self.install(dirs=["/"])
-        self.assertEqual(self.checks()["Claude Code の書き込みの許可"], "ok")
+        self.assertEqual(self.details()["Claude Code の書き込みの許可"], "設定済み")
 
     def test_forbidden_root_is_warn_not_crash(self):
         cfg = Config(tasks_root=self.home)

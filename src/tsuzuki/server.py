@@ -34,10 +34,11 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, unquote
 
-from tsuzuki import taskviews, ui_render, ui_tasks, views
+from tsuzuki import taskprep, taskviews, ui_render, ui_tasks, views
 from tsuzuki.config import (Config, ConfigError, normalize_tasks_root_input, normalize_ticket_url, read_config,
                             resolve_tasks_root, write_tasks_root, write_ticket_url)
-from tsuzuki.doctor import CHECK_ALLOW, CHECK_CLAUDE_MD, task_checks
+from tsuzuki.export import display_path, template_text
+from tsuzuki.privacy import os_error_text
 from tsuzuki.indexer import UpdateReport, update, update_lock
 from tsuzuki.resume import ActionOutcome, is_session_id, open_document, open_place, resume, start_conversation
 from tsuzuki.vscode_ext import VSCodeTerminal, requests_dir
@@ -48,8 +49,10 @@ from tsuzuki.sources.live import LiveSession, live_sessions
 from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger, set_meta
 from tsuzuki.taskindex import ROOT_KEY, forget_task, refresh_task, reset_task_index
 from tsuzuki.tasklinks import link_tasks, set_override
+from tsuzuki.taskprep import TaskPrepError
+from tsuzuki.taskstart import start_dir
 from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, parse_task_md, stage_label, task_title, within
-from tsuzuki.taskwrite import TaskWriteError, copy_into_task, create_task, set_fields, set_waiting, trash_task, update_settings
+from tsuzuki.taskwrite import TaskWriteError, copy_into_task, create_task, place_tasks_readme, set_fields, set_waiting, trash_task, update_settings
 from tsuzuki.workspace import WorkspaceError, ensure_self_first
 
 TOKEN_FILE = "token"
@@ -107,6 +110,13 @@ START_FAILED = "tsuzuki: サーバーを起動できませんでした: %s"
 UPDATE_FAILED = "更新に失敗しました: %s"
 # タスクの操作の答えの文
 NO_TASKS_ROOT = "タスクの置き場所が決まっていません"
+README_PLACED = "タスクの決まり（README.md）を置きました: %s"
+NO_START_DIR = "会話を始めるフォルダーが見つかりません"
+PREP_RULE_PLACED = "%s に決まりの文を足しました"
+PREP_SKILLS_PLACED = "%s にスキルを置きました"
+PREP_ALLOW_PLACED = "%s の additionalDirectories にタスクの置き場所を足しました"
+PREP_DONE = "もう整っています"
+BAD_PREP_ITEM = "準備の項目が正しくありません"
 UNKNOWN_TASK = "台帳にないタスクです"
 TRASHED = "ゴミ箱に入れました。戻すときは、Finder でゴミ箱から %s へドラッグしてください"
 UNKNOWN_SESSION = "台帳にないセッションです"
@@ -756,28 +766,11 @@ def _frag_task_filters(app: App, conn: sqlite3.Connection, _: None, p: _Params) 
                  else views.place_labels(conn, [place]).get(place))
         if label is not None:
             places.append((None if place == ui_tasks.NO_PLACE_ID else place, label, 0))
-    root, notes = app.tasks_root, []
-    if root is not None:
-        notes = _tasks_root_notes(app, root)
+    root = app.tasks_root
     return ui_tasks.frag_task_filters(
         counts, places, status=status, place=place, shared_place=_shared_place(app, conn),
         ticket_url=app.cfg.ticket_url, tasks_root=None if root is None else str(root), home=app.home,
-        tasks_root_value=app.cfg.tasks_root, tasks_root_notes=notes)
-
-
-# 左の「タスクの置き場所」の下に出す、Claude Code 側の案内（点検 tsuzuki doctor と同じ確かめ方）
-_COPY_FOR_CHECK = {CHECK_ALLOW: lambda root: str(root),
-                   CHECK_CLAUDE_MD: lambda root: os.path.join(str(root), "README.md")}
-
-
-def _tasks_root_notes(app: App, root: Path) -> List[Tuple[str, Optional[str]]]:
-    """今の置き場所で、まだ整っていない点検の文と、コピーする文字（許可するパス・README.md のパス）。"""
-    notes = []  # type: List[Tuple[str, Optional[str]]]
-    for check in task_checks(app.cfg, claude_dir=app.claude_dir, home=app.home):
-        if check.status != "ok":
-            copy = _COPY_FOR_CHECK.get(check.name)
-            notes.append(("%s: %s" % (check.name, check.detail), None if copy is None else copy(root)))
-    return notes
+        tasks_root_value=app.cfg.tasks_root)
 
 
 def _frag_tasks(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:
@@ -802,7 +795,39 @@ def _frag_task(app: App, conn: sqlite3.Connection, name: str, p: _Params) -> str
     if detail is None:
         raise _HttpError(404, NOT_FOUND)
     return ui_tasks.frag_task_card(detail, resume_default=cfg.resume_default, home=app.home,
-                                   vscode_terminal=app.vscode_terminal().installed())
+                                   vscode_terminal=app.vscode_terminal().installed(),
+                                   prep=_card_prep(app, conn, name))
+
+
+def _task_start(app: App, conn: sqlite3.Connection, task: str) -> Optional[str]:
+    """タスクの新しい会話を始めるフォルダー（resume.start_conversation の VS Code 以外と同じ）。台帳になければ、
+    またフォルダーでなければ None。"""
+    row = conn.execute("SELECT path, repo_resolved FROM tasks WHERE name = ?", (task,)).fetchone()
+    if row is None:
+        return None
+    start = start_dir(row[0] or "", row[1], _task_workspace(app, conn, task))
+    return start if start and os.path.isdir(start) else None
+
+
+def _card_prep(app: App, conn: sqlite3.Connection, task: str) -> Optional[ui_tasks.CardPrep]:
+    """カードの「Claude で使う準備」。置き場所が決まっていないか、会話を始めるフォルダーがないか、全部整っていれば None。"""
+    root, start = app.tasks_root, _task_start(app, conn, task)
+    if root is None or start is None:
+        return None
+    try:
+        prep = taskprep.check(start, str(root), home=app.home, claude_dir=str(app.claude_dir))
+    except OSError:  # 読めない場所があっても、カードは出す（準備の案内だけ省く）
+        return None
+    if prep.broad:
+        return ui_tasks.CardPrep(missing=(), note=taskprep.BROAD_START)
+    if not prep.missing:
+        return None
+    return ui_tasks.CardPrep(
+        missing=prep.missing, start=display_path(Path(start), app.home),
+        readme=display_path(root / "README.md", app.home),
+        rule_file=display_path(Path(start) / taskprep.RULE_FILE, app.home),
+        skills_dir=display_path(Path(start) / ".claude" / "skills", app.home),
+        allow_file=display_path(Path(prep.allow_file), app.home))
 
 
 def _frag_new_task(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:
@@ -1087,6 +1112,64 @@ def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     return _task_done(LINK_SET[action])
 
 
+def _api_tasks_readme(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """置き場所の直下に、雛形から README.md を置く（今あるものは上書きしない）。README.md はタスクではないので、
+    台帳の読み直しはいらない。"""
+    with update_lock(app.ledger_dir):
+        root = app.tasks_root
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
+        shown = display_path(root, app.home)
+        try:
+            text = template_text("templates/tasks-README.md", tasks_root_display=shown)
+            place_tasks_readme(root, text, claude_dir=app.claude_dir)
+        except (TaskWriteError, OSError) as e:
+            return _task_failed(str(e))
+    return _task_done(README_PLACED % (shown + "/README.md"))
+
+
+def _api_task_prep(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """タスクの会話を始めるフォルダーに、決まりの文・スキル・書き込みの許可のどれか1つを置く（item は rule・skills・
+    allow。決まりのファイルは /api/tasks-readme）。台帳は変わらないので、読み直しはいらない。"""
+    task, item = _task_text(data, "task"), _task_text(data, "item")
+    if item not in (taskprep.RULE, taskprep.SKILLS, taskprep.ALLOW):
+        return _task_failed(BAD_PREP_ITEM)
+    with update_lock(app.ledger_dir), app.connect() as conn:
+        root = app.tasks_root
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
+        if _task_folder(conn, task) is None:
+            return _task_failed(UNKNOWN_TASK)
+        start = _task_start(app, conn, task)
+        if start is None:
+            return _task_failed(NO_START_DIR)
+        claude = str(app.claude_dir)
+        try:
+            prep = taskprep.check(start, str(root), home=app.home, claude_dir=claude)
+            if prep.broad:
+                return _task_failed(taskprep.BROAD_START)
+            if item not in prep.missing:
+                return _task_done(PREP_DONE)
+        except OSError as e:
+            return _task_failed("調べられませんでした（%s）" % os_error_text(e))
+        shown = display_path(root, app.home)
+        try:
+            if item == taskprep.RULE:
+                path = taskprep.place_rule(start, taskprep.rule_snippet(shown), claude_dir=claude)
+                message = PREP_RULE_PLACED % display_path(Path(path), app.home)
+            elif item == taskprep.SKILLS:
+                folder, _, kept = taskprep.place_skills(start, tasks_root_display=shown, claude_dir=claude)
+                message = PREP_SKILLS_PLACED % display_path(Path(folder), app.home)
+                if kept:
+                    message += "（%s は前からあるので残しました）" % "・".join(kept)
+            else:
+                path = taskprep.place_allow(start, str(root), claude_dir=claude)
+                message = PREP_ALLOW_PLACED % display_path(Path(path), app.home)
+        except (TaskPrepError, OSError) as e:
+            return _task_failed(str(e))
+    return _task_done(message)
+
+
 def _api_task_trash(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """タスクのフォルダーをゴミ箱へ動かし、台帳から外す。動かせなかったときは台帳をそのままにする。"""
     task = _task_text(data, "task")
@@ -1229,7 +1312,8 @@ _ACTIONS = {"/api/resume": _api_resume, "/api/open": _api_open, "/api/open-place
             "/api/reindex": _api_reindex, "/api/task-new": _api_task_new, "/api/task-stage": _api_task_stage,
             "/api/task-waiting": _api_task_waiting, "/api/task-settings": _api_task_settings,
             "/api/task-link": _api_task_link, "/api/ticket-url": _api_ticket_url,
-            "/api/tasks-root": _api_tasks_root,
+            "/api/tasks-root": _api_tasks_root, "/api/tasks-readme": _api_tasks_readme,
+            "/api/task-prep": _api_task_prep,
             "/api/task-conversation": _api_task_conversation, "/api/task-trash": _api_task_trash,
             "/api/task-copy-doc": _api_task_copy_doc,
             }  # type: Dict[str, Callable[[App, Dict[str, Any]], Dict[str, Any]]]

@@ -5,11 +5,13 @@ ui_render と同じく、台帳と task.md から来た文字はすべてここ�
 組み立てない）。画面の JavaScript とは data-* 属性で約束する：一覧の行の data-task、カードの data-task・
 data-mtime・data-size、操作のボタンの data-action（前からある resume・copy・open-doc・docs・card に、
 task-stage・task-waiting・task-conversation・task-unlink・copy-picked・new-task・task-open・task-link・
-task-settings・task-trash・task-copy-doc・ticket-url-edit・tasks-root-edit・form-cancel を足す）、選ぶ欄の data-copy。
+task-settings・task-trash・task-copy-doc・ticket-url-edit・tasks-root-edit・tasks-readme・task-prep・form-cancel を足す）、
+選ぶ欄の data-copy、「Claude で使う準備」のボタンの data-item。
 """
 import os
 import re
 import time
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from tsuzuki.render import fmt_local, render_markdown, render_plain
@@ -42,18 +44,67 @@ WORKSPACE_NOTE = (
     'このワークスペースを VS Code で開いているときは、VS Code が窓を読み込み直し、パネルの会話が途切れることがあります。')
 
 
+# カードの「Claude で使う準備」の項目：このタスクの会話を始めるフォルダーに置く物（この順に出す）
+CARD_README, CARD_RULE, CARD_SKILLS, CARD_ALLOW = "readme", "rule", "skills", "allow"
+CARD_PREP_ORDER = (CARD_README, CARD_RULE, CARD_SKILLS, CARD_ALLOW)
+
+
+@dataclass(frozen=True)
+class CardPrep:
+    """カードの「Claude で使う準備」に出すもの。missing はまだ整っていない項目（CARD_*）、あとは表示用のパス
+    （ホームの下は ~）：start は会話を始めるフォルダー、readme は置き場所の README.md、rule_file・skills_dir・
+    allow_file は置く先。"""
+    missing: Tuple[str, ...]
+    start: str = ""
+    readme: str = ""
+    rule_file: str = ""
+    skills_dir: str = ""
+    allow_file: str = ""
+    note: str = ""
+
+
+def _card_prep(prep: Optional[CardPrep]) -> str:
+    """カードの畳んだ一覧（初めは閉じている）。足りない項目がなければ何も出さない。"""
+    if prep is None:
+        return ""
+    if prep.note:  # 置けない理由を1行だけ出す（項目は出さない）
+        return '<div class="prep"><p class="prep-intro">%s</p></div>' % _e(prep.note)
+    items = {
+        CARD_README: ("決まりのファイル", "%s がありません" % prep.readme,
+                      _button("置く", "btn", ("data-action", "tasks-readme"))),
+        CARD_RULE: ("CLAUDE.local.md の決まり", "%s に、タスクの決まりを読む文を足します" % prep.rule_file,
+                    _button("足す", "btn", ("data-action", "task-prep"), ("data-item", "rule"))),
+        CARD_SKILLS: ("スキル", "task-start・task-handoff を %s に置きます" % prep.skills_dir,
+                      _button("置く", "btn", ("data-action", "task-prep"), ("data-item", "skills"))),
+        CARD_ALLOW: ("書き込みの許可",
+                     "%s の additionalDirectories に、タスクの置き場所を足します" % prep.allow_file,
+                     _button("足す", "btn", ("data-action", "task-prep"), ("data-item", "allow"))),
+    }
+    shown = [key for key in CARD_PREP_ORDER if key in prep.missing]
+    if not shown:
+        return ""
+    out = ['<details class="prep"><summary>Claude で使う準備：あと %sつ</summary>' % len(shown),
+           '<p class="prep-intro">%s</p>' % _e(
+               "このタスクの会話を始めるフォルダー（%s）に置きます。そこで始めた会話にだけ効き、"
+               "ほかのプロジェクトの会話には効きません。" % prep.start)]
+    for key in shown:
+        name, what, button = items[key]
+        out.append('<div class="prep-item"><div class="prep-name">✗ %s</div><div class="prep-what">%s</div>'
+                   '<div class="prep-btns">%s</div></div>' % (_e(name), _e(what), button))
+    out.append("</details>")
+    return "".join(out)
+
+
 # 左：状況・場所・共通の資料
 
 def frag_task_filters(counts: Dict[str, int], places: List[Tuple[Optional[int], str, int]], *, status: str,
                       place: Optional[int], shared_place: Optional[int], ticket_url: Optional[str] = None,
-                      tasks_root: Optional[str] = None, home: str = "", tasks_root_value: str = "",
-                      tasks_root_notes: Sequence[Tuple[str, Optional[str]]] = ()) -> str:
+                      tasks_root: Optional[str] = None, home: str = "", tasks_root_value: str = "") -> str:
     """状況（進行中と待ち・完了・すべて）、場所（「すべて」が最初。場所のないタスクは「場所なし」で、ID は
     NO_PLACE_ID）、共通の資料（押すと資料の画面を共通の資料の場所で絞って開く）。places の場所の ID が None なら
     場所なし。place は選んでいる場所（None はすべて）。最後に、チケットのリンク先（設定 ticket_url。None は
     リポジトリの Issue）と、それを変える入力欄（初めは hidden）。その下に、タスクの置き場所（表示用の
-    絶対パスの tasks_root（ホームの下は ~ で出す。None なら出さない）と、入力欄に入れる設定の値 tasks_root_value と、Claude Code
-    側の案内 tasks_root_notes（(文, コピーする文字 or None) の並び）。"""
+    絶対パスの tasks_root（ホームの下は ~ で出す。None なら出さない）と、入力欄に入れる設定の値 tasks_root_value。"""
     out = ['<div class="ph">状況</div>']
     out += [_filter_row("data-status", value, label, _n(counts.get(key, 0)), key == status)
             for key, value, label in STATUS_FILTERS]
@@ -86,9 +137,6 @@ def frag_task_filters(counts: Dict[str, int], places: List[Tuple[Optional[int], 
             '<input name="path"%s placeholder="~/tasks" spellcheck="false" maxlength="1000">'
             '<div class="btns"><button type="submit" class="btn pri">保存</button>%s</div></form>' % (
                 _attrs(("value", tasks_root_value)), _button("やめる", "btn", ("data-action", "form-cancel"))))
-        for text, copy in tasks_root_notes:
-            out.append('<div class="note">%s%s</div>' % (_e(text), "" if copy is None else " " + _button(
-                "コピー", "btn", ("data-action", "copy"), ("data-copy", copy))))
     return "".join(out)
 
 
@@ -151,12 +199,13 @@ def _line2(r: TaskRow) -> str:
 # 右：タスクのカード
 
 def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = None,
-                   vscode_terminal: bool = False) -> str:
+                   vscode_terminal: bool = False, prep: Optional[CardPrep] = None) -> str:
     """タスクのカード：題と3つのボタン、段階と待ち、現在地と次の一手、待っていること・
     決めたこと・チケット・ブランチと PR、会話、資料（3つの束）、一番下の「設定を変える」と「ゴミ箱に入れる」、
     注意の順。data-mtime は task.md の更新時刻を
     そのままの精度で（repr）持ち、段階と待ちの操作がそれを送り返す。home の下のパスは ~ で出す。
-    vscode_terminal は拡張 Tsuzuki Terminal を入れてあるか（入れてあれば、新しい会話のボタンが1つ増える）。"""
+    vscode_terminal は拡張 Tsuzuki Terminal を入れてあるか（入れてあれば、新しい会話のボタンが1つ増える）。
+    prep は「Claude で使う準備」（まだ整っていない項目があるときだけ、フィールドの下に畳んで出す）。"""
     row = d.row
     boxed = [w for w in d.warnings if w == NO_CURRENT]
     notes = [w for w in d.warnings if w != NO_CURRENT]
@@ -168,7 +217,7 @@ def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = 
                               ("data-size", d.md_size)),
            '<div class="dh"><div class="head"><h4>%s</h4><div class="meta">%s</div></div><div class="btns">%s</div>'
            '</div>' % (_e(row.title), meta, _card_buttons(d, resume_default, vscode_terminal)),
-           _steps(row, d.sections.get("待っていること")), _status_box(d, boxed), _fields(d), _sessions(d.sessions), _documents(d, home)]
+           _steps(row, d.sections.get("待っていること")), _status_box(d, boxed), _fields(d), _card_prep(prep), _sessions(d.sessions), _documents(d, home)]
     out.append(_foot(d, home))
     out += ['<div class="notice">%s</div>' % _e(note) for note in notes]
     out.append("</div>")
