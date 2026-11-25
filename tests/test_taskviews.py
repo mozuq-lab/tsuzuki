@@ -250,6 +250,22 @@ class TaskViewsTest(unittest.TestCase):
         self.assertEqual(sorted(s.confidence for s in d_.sessions), ["confirmed", "weak"])
         self.assertEqual(d_.resume_session, "s1")
 
+    def test_other_docs_know_when_they_were_copied(self):
+        with allow_system_tmp():
+            d = self.add_task("a")
+            src = self.root + "/outside"
+            os.makedirs(src)
+            for name, body in (("same.md", "abc"), ("diff.md", "abc"), ("none.md", "abc")):
+                Path(src, name).write_text(body)
+                self.add_doc(src + "/" + name, "readme")
+                self.add_doc_link("s1", src + "/" + name, "read")
+            Path(d, "same.md").write_text("xyz")  # 中身は違っても、同じ名前で同じ大きさ
+            Path(d, "diff.md").write_text("abcd")
+            os.makedirs(d + "/none.md.d")
+            self.link("a", "s1", "cwd", "confirmed")
+            found = {i.path.rsplit("/", 1)[1]: i.copied for i in self.detail("a").other_docs}
+        self.assertEqual(found, {"same.md": True, "diff.md": False, "none.md": False})
+
     def test_shared_and_other_bundles_are_capped(self):
         # 共通の資料とほかの場所の資料は、新しい順に50件まで。全部の数も渡す
         with allow_system_tmp():

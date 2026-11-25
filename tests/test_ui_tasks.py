@@ -90,10 +90,10 @@ def session_item(rule="フォルダーで開始", confidence="confirmed", label=
 
 
 def file_item(path, *, rel_path=None, kind="other", kind_label="その他", title=None, excerpt="", relation=None,
-              doc_id=None, missing=False) -> TaskFileItem:
+              doc_id=None, missing=False, copied=False) -> TaskFileItem:
     return TaskFileItem(path=path, rel_path=rel_path or path, kind=kind, kind_label=kind_label,
                         title=title or path.rsplit("/", 1)[-1], excerpt=excerpt, relation=relation, doc_id=doc_id,
-                        missing=missing)
+                        missing=missing, copied=copied)
 
 
 def make_detail(*, stage="実装", stage_from_pr=False, warnings=(), file_path=None, row=None, **kw) -> TaskDetail:
@@ -601,6 +601,26 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         # repo がなければ「なし」が選ばれる
         none = Markup(frag_task_settings("a", TaskFile(title="t"), "t", repos=[], mtime=1.0, size=1))
         self.assertIn("selected", [a for tag, a in none.tags if tag == "option"][0])
+
+    def test_copy_to_task_button(self):
+        missing = file_item("/Users/me/old/gone.md", missing=True, relation="名指し", doc_id=30)
+        unknown = file_item("/Users/me/old/named.md", relation="名指し")  # 台帳にない（doc_id が None）
+        done = file_item("/Users/me/dev/web-app/docs/done.md", doc_id=31, copied=True)
+        d = make_detail(other_docs=make_detail().other_docs + [missing, unknown, done], other_total=4)
+        html = frag_task_card(d, resume_default="vscode")
+        rows = re.findall(r'<div class="doc">(.*?)</div>', html)
+        self.assertEqual(len(rows), 7)
+        self.assertEqual(html.count('data-action="task-copy-doc"'), 4)  # ほかの場所の資料の4行だけ
+        for row in rows[:3]:
+            self.assertNotIn("task-copy-doc", row)
+        self.assertIn('<button class="cp" data-action="task-copy-doc" data-doc="14">タスクへコピー</button>'
+                      '<button class="cp" data-action="copy"', rows[3])
+        self.assertRegex(rows[4], r'data-action="task-copy-doc"[^>]* disabled>タスクへコピー')
+        self.assertRegex(rows[5], r'<button class="cp" data-action="task-copy-doc" title="台帳にない資料はコピーできません" '
+                                  r'disabled>タスクへコピー')
+        self.assertNotIn("data-doc", rows[5].split("task-copy-doc")[1].split(">")[0])
+        self.assertIn('<span class="ex copied">コピー済み</span>', rows[6])
+        self.assertNotIn("コピー済み", rows[3])
 
     def test_card_foot_order(self):
         html = frag_task_card(make_detail(), resume_default="vscode", home=HOME)

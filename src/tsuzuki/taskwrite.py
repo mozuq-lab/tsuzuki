@@ -2,10 +2,12 @@
 
 書くのは「新しいタスクのフォルダーと task.md」と「既存の task.md の見出し情報の行と待っていることの欄」だけ。
 画面から変えるのは title / ticket / repo / workspace の行と、題が変わったときの本文の見出しだけ。
-あとは、頼まれたときにタスクのフォルダーをゴミ箱へ動かす（消さずに、動かすだけ）。
+あとは、頼まれたときにタスクのフォルダーをゴミ箱へ動かす（消さずに、動かすだけ）ことと、ほかの場所の資料を
+タスクのフォルダーの直下へコピーする（元は変えず、今あるファイルも上書きしない）こと。
 """
 import os
 import re
+import shutil
 import tempfile
 import unicodedata
 from datetime import datetime
@@ -19,6 +21,11 @@ CHANGED = "task.md が変わりました。読み直してください"
 NO_TRASH = "このディスクのゴミ箱が見つかりません。Finder でゴミ箱に入れてください"
 CANNOT_TRASH = "ゴミ箱に入れられませんでした（%s）。Finder でゴミ箱に入れてください"
 NOT_A_TASK_FOLDER = "ゴミ箱に入れられるのはタスクのフォルダーだけです: %s"
+NOT_A_COPY_TARGET = "コピー先はタスクのフォルダーだけです: %s"
+NOT_A_FILE = "資料が見つかりません: %s"
+ALREADY_IN_TASK = "この資料はもうタスクのフォルダーの中にあります"
+CANNOT_COPY = "コピーできませんでした: %s"
+MAX_COPY_NAMES = 999  # name-999 まで試して、なお空かなければ諦める
 BAD_WORKSPACE = "ワークスペースを使えません: %s"
 BAD_SECTION_LINE = "見出しやコードの囲みになる行は書けません: %s"
 WAITING_SECTION = "待っていること"
@@ -124,6 +131,39 @@ def _check_task_folder(task_dir: str, tasks_root: Path, message: str) -> str:
             or name == SHARED_DIR or name.startswith(".")):
         raise TaskWriteError(message % task_dir)
     return real
+
+
+def copy_into_task(task_dir: str, tasks_root: Path, source: str, *, claude_dir: Optional[Path] = None) -> str:
+    """source（普通のファイル）をタスクのフォルダーの直下へコピーし、コピーした先のパスを返す。元は動かさず、
+    変えない。同じ名前があれば name-2.ext・name-3.ext…にして、今あるファイルは上書きしない（宛先の
+    シンボリックリンクもたどらない）。コピーに失敗したら、書きかけのファイルを消す。"""
+    real = _check_task_folder(task_dir, tasks_root, NOT_A_COPY_TARGET)
+    _refuse_claude_dir(tasks_root, claude_dir)
+    src = os.path.realpath(source)
+    if not os.path.isfile(src):
+        raise TaskWriteError(NOT_A_FILE % source)
+    if os.path.dirname(src) == real or src.startswith(real + "/"):
+        raise TaskWriteError(ALREADY_IN_TASK)
+    stem, ext = os.path.splitext(os.path.basename(src))
+    for n in range(1, MAX_COPY_NAMES + 1):
+        dest = os.path.join(real, stem + ext if n == 1 else "%s-%d%s" % (stem, n, ext))
+        try:
+            fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)  # O_EXCL は宛先のリンクもたどらない
+        except FileExistsError:
+            continue
+        except OSError as e:
+            raise TaskWriteError(CANNOT_COPY % (e.strerror or e))
+        try:
+            with os.fdopen(fd, "wb") as out, open(src, "rb") as f:
+                shutil.copyfileobj(f, out)
+        except OSError as e:
+            try:
+                os.unlink(dest)
+            except OSError:
+                pass
+            raise TaskWriteError(CANNOT_COPY % (e.strerror or e))
+        return dest
+    raise TaskWriteError(CANNOT_COPY % "同じ名前のファイルが多すぎます")
 
 
 def find_trash(path: str, home: str) -> Optional[str]:

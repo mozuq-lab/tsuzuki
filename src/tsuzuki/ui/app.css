@@ -630,6 +630,7 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 .fn { margin-left: .45rem; font-family: var(--mono); font-size: 11px; color: var(--text-tertiary); }
 .ex { display: block; font-size: 11px; color: var(--text-secondary); }
 .ex.missing { color: var(--gone-text); }
+.ex.copied { color: var(--accent); }
 .cp {
   flex: none;
   padding: 0 .4rem;

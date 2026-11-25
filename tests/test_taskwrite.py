@@ -9,10 +9,10 @@ from unittest import mock
 
 from tsuzuki.tasks import parse_task_md
 from tsuzuki import taskwrite
-from tsuzuki.taskwrite import (BAD_SECTION_LINE, CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
+from tsuzuki.taskwrite import (ALREADY_IN_TASK, BAD_SECTION_LINE, CANNOT_COPY, NOT_A_COPY_TARGET, NOT_A_FILE, CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
                               find_trash, normalize_short_name, normalize_ticket, render_task_md, section_text,
                               set_fields, set_waiting, trash_task, BAD_WORKSPACE, normalize_workspace,
-                              replace_heading, update_settings)
+                              replace_heading, update_settings, copy_into_task)
 from tests.fixtures import allow_system_tmp, run_cli
 
 TEMPLATE = (
@@ -425,6 +425,98 @@ class WaitingTest(_TmpCase):
                 set_waiting(md, self.root, waiting=True, reason="返事", **kw)
             self.assertEqual(str(cm.exception), CHANGED)
             self.assertEqual(md.read_bytes(), before)
+
+
+class CopyTest(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.folder = self.root / "2026-11-20-a"
+        self.folder.mkdir(parents=True)
+        (self.folder / "task.md").write_text("# a\n", encoding="utf-8")
+        self.outside = self.base / "repo" / "docs"
+        self.outside.mkdir(parents=True)
+        self.src = self.outside / "README.md"
+        self.src.write_text("元の中身\n", encoding="utf-8")
+        os.utime(str(self.src), (1_000_000, 1_000_000))
+
+    def copy(self, source=None, task_dir=None, **kw):
+        return copy_into_task(str(task_dir or self.folder), self.root, str(source or self.src), **kw)
+
+    def test_copy_into_the_task_folder(self):
+        dest = self.copy()
+        self.assertEqual(dest, str(self.folder / "README.md"))
+        self.assertEqual((self.folder / "README.md").read_text(encoding="utf-8"), "元の中身\n")
+        self.assertEqual(self.src.read_text(encoding="utf-8"), "元の中身\n")
+        self.assertEqual(self.src.stat().st_mtime, 1_000_000)
+
+    def test_copy_never_overwrites(self):
+        (self.folder / "README.md").write_text("もとからある\n", encoding="utf-8")
+        self.assertEqual(self.copy(), str(self.folder / "README-2.md"))
+        self.assertEqual(self.copy(), str(self.folder / "README-3.md"))
+        self.assertEqual((self.folder / "README.md").read_text(encoding="utf-8"), "もとからある\n")
+        self.assertEqual((self.folder / "README-3.md").read_text(encoding="utf-8"), "元の中身\n")
+
+    def test_copy_never_follows_a_symlink_at_the_destination(self):
+        target = self.base / "victim.md"
+        target.write_text("守る\n", encoding="utf-8")
+        os.symlink(str(target), str(self.folder / "README.md"))
+        self.assertEqual(self.copy(), str(self.folder / "README-2.md"))
+        self.assertEqual(target.read_text(encoding="utf-8"), "守る\n")
+
+    def test_copy_without_extension(self):
+        src = self.outside / "Makefile"
+        src.write_text("all:\n", encoding="utf-8")
+        self.copy(src)
+        self.assertEqual(self.copy(src), str(self.folder / "Makefile-2"))
+
+    def test_copy_refusals(self):
+        (self.root / "shared").mkdir()
+        inside = self.folder / "notes.md"
+        inside.write_text("x\n", encoding="utf-8")
+        link = self.base / "dirlink"
+        os.symlink(str(self.outside), str(link))
+        for source, task_dir, message in (
+                (self.outside, None, NOT_A_FILE % self.outside),
+                (self.base / "nothing.md", None, NOT_A_FILE % (self.base / "nothing.md")),
+                (link, None, NOT_A_FILE % link),
+                (inside, None, ALREADY_IN_TASK),
+                (self.src, self.root / "shared", NOT_A_COPY_TARGET % (self.root / "shared")),
+                (self.src, self.base / "repo", NOT_A_COPY_TARGET % (self.base / "repo"))):
+            with self.assertRaises(TaskWriteError, msg=str(source)) as cm:
+                self.copy(source, task_dir)
+            self.assertEqual(str(cm.exception), message)
+        self.assertEqual(sorted(os.listdir(str(self.folder))), ["notes.md", "task.md"])
+        self.assertEqual(sorted(os.listdir(str(self.root / "shared"))), [])
+
+    def test_a_link_into_the_task_folder_is_already_there(self):
+        link = self.base / "link.md"
+        os.symlink(str(self.folder / "task.md"), str(link))
+        with self.assertRaises(TaskWriteError) as cm:
+            self.copy(link)
+        self.assertEqual(str(cm.exception), ALREADY_IN_TASK)
+
+    def test_copy_failure_removes_the_partial_file(self):
+        with mock.patch("tsuzuki.taskwrite.shutil.copyfileobj", side_effect=OSError(28, "No space left")):
+            with self.assertRaises(TaskWriteError) as cm:
+                self.copy()
+        self.assertIn(CANNOT_COPY % "", str(cm.exception))
+        self.assertFalse((self.folder / "README.md").exists())
+
+    def test_copy_gives_up_after_999(self):
+        real_open = os.open
+
+        def busy(path, flags, mode=0o777):
+            if os.path.dirname(path) == str(self.folder):
+                raise FileExistsError(17, "exists", path)
+            return real_open(path, flags, mode)
+        with mock.patch("tsuzuki.taskwrite.os.open", side_effect=busy):
+            with self.assertRaises(TaskWriteError) as cm:
+                self.copy()
+        self.assertEqual(str(cm.exception), CANNOT_COPY % "同じ名前のファイルが多すぎます")
+
+    def test_copy_refuses_the_claude_dir(self):
+        with self.assertRaises(TaskWriteError):
+            self.copy(claude_dir=self.base)  # 置き場所が Claude Code の設定ディレクトリの中
 
 
 class TrashTest(_TmpCase):

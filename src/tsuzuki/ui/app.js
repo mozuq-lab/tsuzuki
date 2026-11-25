@@ -497,6 +497,8 @@ const ACTIONS = {
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
   "task-trash": (button) => trashTask(button),
+  "task-copy-doc": (button) => sendTask("/api/task-copy-doc", { task: button.closest(".task-card").dataset.task,
+    doc_id: Number(button.dataset.doc) }),
   "copy-picked": (button) => copyPicked(button),
   "new-task": () => openNewTask(),
   // セッションのカードと検索・資料の行から

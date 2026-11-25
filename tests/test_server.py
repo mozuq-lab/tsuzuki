@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import quote
 
-from tsuzuki import cli, documents, indexer, server
+from tsuzuki import cli, documents, indexer, server, taskwrite
 from tsuzuki.config import Config, read_config
 from tsuzuki.indexer import update
 from tsuzuki.server import COOKIE, TICKET_URL_RESET, TOKEN_FILE, make_server, serve
@@ -1102,6 +1102,40 @@ class TaskServerTest(ServerCase):
                                                ("2026-11-20-a",)).fetchone(), table)
             self.assertIsNone(conn.execute("SELECT 1 FROM documents WHERE path LIKE ?",
                                            (os.path.join(self.tasks_root, "2026-11-20-a") + "/%",)).fetchone())
+
+    def test_task_copy_doc(self):
+        task = "2026-11-20-a"
+        self.action("/api/task-link", {"task": task, "session_id": S1, "action": "add"})
+        before = self.frag("/frag/task/" + task)
+        self.assertIn('data-action="task-copy-doc" data-doc="%d"' % self.md_doc, before)
+        self.assertNotIn("コピー済み", before)
+        answer = self.action("/api/task-copy-doc", {"task": task, "doc_id": self.md_doc}).json()
+        self.assertEqual(answer, {"ok": True, "needs_confirm": False, "message": server.COPIED % "plan.md"})
+        copy = os.path.join(self.tasks_root, task, "plan.md")
+        self.assertEqual(self.text(copy), "# 計画\n\n引き継ぎの**本文**")
+        self.assertEqual(self.text(self.md_path), "# 計画\n\n引き継ぎの**本文**")  # 元は変わらない
+        card = self.frag("/frag/task/" + task)
+        folder = card[card.index("このタスクのフォルダー"):card.index("ほかの場所の資料")]
+        self.assertIn('<span class="fn">plan.md</span>', folder)
+        self.assertIn("コピー済み", card[card.index("ほかの場所の資料"):])
+        # もう一度コピーすると、上書きせずに plan-2.md にする
+        again = self.action("/api/task-copy-doc", {"task": task, "doc_id": self.md_doc}).json()
+        self.assertEqual(again["message"], server.COPIED % "plan-2.md")
+        self.assertTrue(os.path.isfile(os.path.join(self.tasks_root, task, "plan-2.md")))
+
+    def test_task_copy_doc_refusals(self):
+        task = "2026-11-20-a"
+        unknown = {"ok": False, "needs_confirm": False, "message": server.UNKNOWN_DOC}
+        self.assertEqual(self.action("/api/task-copy-doc", {"task": task, "doc_id": 99999}).json(), unknown)
+        self.assertEqual(self.action("/api/task-copy-doc", {"task": "nope", "doc_id": self.md_doc}).json(),
+                         {"ok": False, "needs_confirm": False, "message": server.UNKNOWN_TASK})
+        self.assertEqual(self.action("/api/task-copy-doc", {"task": task, "doc_id": "x"}).status, 400)
+        self.assertEqual(self.post("/api/task-copy-doc", {"task": task, "doc_id": self.md_doc}, cookie=True,
+                                   origin=self.origin).status, 403)  # CSRF なし
+        os.remove(self.md_path)  # 台帳にあっても、ファイルがなくなっていれば断る
+        gone = self.action("/api/task-copy-doc", {"task": task, "doc_id": self.md_doc}).json()
+        self.assertEqual((gone["ok"], gone["message"]), (False, taskwrite.NOT_A_FILE % self.md_path))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tasks_root, task))), ["task.md"])
 
     def test_task_trash_refusals(self):
         for task in ("nope", "shared"):

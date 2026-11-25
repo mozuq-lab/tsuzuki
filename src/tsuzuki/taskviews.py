@@ -64,6 +64,7 @@ class TaskFileItem:
     relation: Optional[str]
     doc_id: Optional[int]
     missing: bool
+    copied: bool = False  # ほかの場所の資料：タスクのフォルダーに同じ名前・同じ大きさのファイルがある
 
 
 @dataclass
@@ -416,6 +417,15 @@ def _folder_files(conn: sqlite3.Connection, task_dir: str, root: str, exclude_di
     return [item for _, item in items], cut
 
 
+def _copied(path: str, task_dir: str) -> bool:
+    """タスクのフォルダーの直下に、同じ名前で同じ大きさの普通のファイルがあるか（コピー済みの目安）。"""
+    mine = os.path.join(task_dir, os.path.basename(path))
+    try:
+        return os.path.isfile(mine) and os.path.getsize(mine) == os.path.getsize(path)
+    except OSError:
+        return False
+
+
 def _doc_bundles(conn: sqlite3.Connection, task_dir: str, root: str, relations: Dict[str, Tuple[str, str]],
                  named: Set[str]) -> Tuple[List[TaskFileItem], List[TaskFileItem]]:
     """共通の資料とほかの場所の資料。どちらも新しい順で、全部を返す（カードに並べるのは呼ぶ側が切る）。"""
@@ -430,7 +440,11 @@ def _doc_bundles(conn: sqlite3.Connection, task_dir: str, root: str, relations: 
             continue  # ほかの場所の資料は、資料とみなされたものだけ（名指しは別）
         missing = p not in docs and not os.path.exists(p)
         item = _file_item(p, p, docs.get(p), None, _REL_LABELS[rel], missing)
-        (shared if T.within(p, shared_dir) else other).append((ts, item))
+        if T.within(p, shared_dir):
+            shared.append((ts, item))
+        else:
+            item.copied = _copied(p, task_dir)
+            other.append((ts, item))
     for bundle in (shared, other):
         bundle.sort(key=lambda x: x[1].path)
         bundle.sort(key=lambda x: x[0], reverse=True)

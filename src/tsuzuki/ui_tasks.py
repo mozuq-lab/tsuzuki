@@ -28,6 +28,7 @@ FROM_PR = "PR の記録から"
 NO_CURRENT = "task.md に現在地がありません"  # taskviews の注意と同じ文。現在地の枠の中に添える
 NO_SESSION_TO_RESUME = "続きから開ける会話がありません"
 CANNOT_RESUME = "この会話は再開できません"
+NOT_IN_LEDGER = "台帳にない資料はコピーできません"
 NOT_INDEXED = "task.md はまだ台帳に入っていません"
 _PR_NUMBER = re.compile(r"/(\d+)/?$")
 _LINK_SCHEMES = ("http://", "https://")
@@ -290,7 +291,7 @@ def _documents(d: TaskDetail, home: Optional[str]) -> str:
         if not items:
             continue
         out.append('<div class="fold">%s</div>' % heading)
-        out += [_file_row(item, shown(item)) for item in items]
+        out += [_file_row(item, shown(item), copy_to_task=items is d.other_docs) for item in items]
         if items is d.folder_files and d.folder_cut:
             out.append('<div class="listnote">フォルダーのファイルが多いため、%s件まで並べています</div>'
                        % _n(TASK_FILES_LIMIT))
@@ -302,9 +303,10 @@ def _documents(d: TaskDetail, home: Optional[str]) -> str:
     return "".join(out)
 
 
-def _file_row(item: TaskFileItem, name: str) -> str:
+def _file_row(item: TaskFileItem, name: str, *, copy_to_task: bool = False) -> str:
     """選ぶ欄・種類・題（台帳の資料なら押すと開く）と名前と冒頭・関わり方・@ コピー。見つからない資料は、
-    そう書いてコピーと選ぶ欄を止める。"""
+    そう書いてコピーと選ぶ欄を止める。copy_to_task（ほかの場所の資料）なら、@ コピーの前に「タスクへコピー」
+    を置く（台帳にない資料と見つからない資料では押せない）。"""
     ref = at_reference(item.path)
     pick = "<input%s%s>" % (_attrs(("type", "checkbox"), ("class", "pick"), ("data-copy", ref),
                                    ("aria-label", "選ぶ：" + name)), " disabled" if item.missing else "")
@@ -315,10 +317,17 @@ def _file_row(item: TaskFileItem, name: str) -> str:
         title += '<span class="ex">%s</span>' % _e(item.excerpt)
     if item.missing:
         title += '<span class="ex missing">見つかりません</span>'
+    if copy_to_task and item.copied:
+        title += '<span class="ex copied">コピー済み</span>'
     pairs = [("class", "p")] + ([("data-doc", item.doc_id)] if item.doc_id is not None else [])
     relation = '<span class="w">%s</span>' % _e(item.relation) if item.relation else ""
-    return '<div class="doc">%s<span class="ty">%s</span><span%s>%s</span>%s%s</div>' % (
-        pick, _e(item.kind_label), _attrs(*pairs), title, relation,
+    copy_button = ""
+    if copy_to_task:
+        attrs = [("data-action", "task-copy-doc")]
+        attrs += [("data-doc", item.doc_id)] if item.doc_id is not None else [("title", NOT_IN_LEDGER)]
+        copy_button = _button("タスクへコピー", "cp", *attrs, disabled=item.missing or item.doc_id is None)
+    return '<div class="doc">%s<span class="ty">%s</span><span%s>%s</span>%s%s%s</div>' % (
+        pick, _e(item.kind_label), _attrs(*pairs), title, relation, copy_button,
         _button("@ コピー", "cp", ("data-action", "copy"), ("data-copy", ref), disabled=item.missing))
 
 

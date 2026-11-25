@@ -47,7 +47,7 @@ from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger
 from tsuzuki.taskindex import forget_task, refresh_task
 from tsuzuki.tasklinks import link_tasks, set_override
 from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, parse_task_md, stage_label, task_title, within
-from tsuzuki.taskwrite import TaskWriteError, create_task, set_fields, set_waiting, trash_task, update_settings
+from tsuzuki.taskwrite import TaskWriteError, copy_into_task, create_task, set_fields, set_waiting, trash_task, update_settings
 
 TOKEN_FILE = "token"
 COOKIE = "tsuzuki_key"
@@ -107,6 +107,8 @@ NO_TASKS_ROOT = "タスクの置き場所が決まっていません"
 UNKNOWN_TASK = "台帳にないタスクです"
 TRASHED = "ゴミ箱に入れました。戻すときは、Finder でゴミ箱から %s へドラッグしてください"
 UNKNOWN_SESSION = "台帳にないセッションです"
+UNKNOWN_DOC = "台帳にない資料です"
+COPIED = "タスクのフォルダーにコピーしました: %s"
 BAD_LINK_ACTION = "結び付けの操作が正しくありません"
 NO_TITLE = "題を入れてください"
 CANNOT_CREATE = "タスクを作れませんでした: %s"
@@ -1013,6 +1015,28 @@ def _api_task_trash(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     return _task_done(TRASHED % root)
 
 
+def _api_task_copy_doc(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """台帳にある資料を、タスクのフォルダーへコピーする（元は動かさない）。コピーしたら、タスクを読み直す。"""
+    task, doc_id = _task_text(data, "task"), _id_field(data, "doc_id")
+    root = app.tasks_root
+    if root is None:
+        return _task_failed(NO_TASKS_ROOT)
+    with update_lock(app.ledger_dir), app.connect() as conn:
+        folder = _task_folder(conn, task)
+        if folder is None:
+            return _task_failed(UNKNOWN_TASK)
+        found = conn.execute("SELECT path FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        if found is None:
+            return _task_failed(UNKNOWN_DOC)
+        try:
+            copied = copy_into_task(folder, root, found[0], claude_dir=app.claude_dir)
+        except TaskWriteError as e:
+            return _task_failed(str(e))
+        _reread_task(app, conn, task)
+    app.forget_searches()
+    return _task_done(COPIED % os.path.basename(copied))
+
+
 def _api_task_conversation(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """タスクから新しい会話を始める。copy なら何も起動せず、貼り付けるコマンドを command で返す。"""
     task, how = _task_text(data, "task"), _task_text(data, "how")
@@ -1115,6 +1139,7 @@ _ACTIONS = {"/api/resume": _api_resume, "/api/open": _api_open, "/api/open-place
             "/api/task-waiting": _api_task_waiting, "/api/task-settings": _api_task_settings,
             "/api/task-link": _api_task_link, "/api/ticket-url": _api_ticket_url,
             "/api/task-conversation": _api_task_conversation, "/api/task-trash": _api_task_trash,
+            "/api/task-copy-doc": _api_task_copy_doc,
             }  # type: Dict[str, Callable[[App, Dict[str, Any]], Dict[str, Any]]]
 
 
