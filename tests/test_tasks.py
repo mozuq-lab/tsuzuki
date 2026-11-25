@@ -35,6 +35,12 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(tf.sections["次の一手"], "- 結合テストを通す")
         self.assertEqual(tf.sections["待っていること"], "なし")
 
+    def test_workspace_is_read(self):
+        tf = parse_task_md("---\ntitle: x\nworkspace: /w/a.code-workspace\n---\n")
+        self.assertEqual(tf.workspace, "/w/a.code-workspace")
+        self.assertIsNone(parse_task_md("---\ntitle: x\nworkspace:\n---\n").workspace)
+        self.assertIsNone(parse_task_md(SAMPLE).workspace)
+
     def test_value_with_colon_and_quotes(self):
         tf = parse_task_md("---\ntitle: 修正: ログイン\nticket: '#9'\n---\n")
         self.assertEqual((tf.title, tf.ticket), ("修正: ログイン", "#9"))

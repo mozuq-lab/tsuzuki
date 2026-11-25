@@ -1204,6 +1204,54 @@ class TaskServerTest(ServerCase):
         self.assertEqual(self.action("/api/task-waiting", {"task": "2026-11-20-a", "waiting": True, "reason": 5,
                                                            "mtime": stamp[0], "size": stamp[1]}).status, 400)
 
+    def test_task_settings_form_and_save(self):
+        form = self.frag("/frag/task-settings/2026-11-20-a")
+        self.assertIn('<form id="task-settings"', form)
+        self.assertIn('value="ログインのセッション切れを延ばす"', form)
+        self.assertIn('value="#123"', form)
+        self.assertIn('<option value="%s"' % self.proj, form)
+        stamp = self.card_stamp(form)
+        ws = os.path.join(self.root, "work.code-workspace")
+        write_file(ws, json.dumps({"folders": [{"path": self.proj}]}))
+        body = {"task": "2026-11-20-a", "title": "新しい題", "ticket": "#123", "repo": self.proj, "workspace": ws,
+                "mtime": stamp[0], "size": stamp[1]}
+        r = self.action("/api/task-settings", body)
+        self.assertEqual(r.json(), {"ok": True, "needs_confirm": False, "message": "設定を変えました"})
+        text = self.text()
+        self.assertIn("title: 新しい題\n", text)
+        self.assertIn("# 新しい題\n", text)
+        self.assertEqual(parse_task_md(text).workspace, ws)
+        card = self.frag("/frag/task/2026-11-20-a")
+        self.assertIn("<h4>新しい題</h4>", card)
+        # 同じ値で、取り直した時刻で送れば、書かない
+        stamp = self.card_stamp(card)
+        before = os.stat(self.task_md).st_mtime_ns
+        same = self.action("/api/task-settings", dict(body, mtime=stamp[0], size=stamp[1]))
+        self.assertEqual(same.json(), {"ok": True, "needs_confirm": False, "message": "変わった所はありません"})
+        self.assertEqual(os.stat(self.task_md).st_mtime_ns, before)
+        # 古いフォームの時刻では書かない
+        stale = self.action("/api/task-settings", dict(body, title="また別", mtime=0.5, size=1))
+        self.assertEqual(stale.json(), {"ok": False, "needs_confirm": False, "message": CHANGED})
+        self.assertIn('<form id="task-settings"', self.frag("/frag/task-settings/" + quote("2026-11-22-ログイン")))
+        for bad in ("nope", "shared", "..%2Fx"):
+            self.assertEqual(self.get("/frag/task-settings/" + bad, cookie=True).status, 404)
+
+    def test_task_settings_repo_must_be_a_place(self):
+        stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
+        body = {"task": "2026-11-20-a", "title": "x", "ticket": "", "repo": self.root, "workspace": "",
+                "mtime": stamp[0], "size": stamp[1]}
+        r = self.action("/api/task-settings", body)
+        self.assertEqual(r.json(), {"ok": False, "needs_confirm": False, "message": "リポジトリは場所の一覧から選んでください"})
+        self.assertEqual(self.text(), TASK_MD % self.proj)
+        # 空と、今の task.md の repo の値（一覧になくても）は通る
+        self.assertTrue(self.action("/api/task-settings", dict(body, repo="")).json()["ok"])
+        write_file(self.task_md, self.text().replace("repo:\n", "repo: /gone/repo\n"))
+        self.reindex(tasks_root=Path(self.tasks_root))
+        stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
+        r = self.action("/api/task-settings", dict(body, repo="/gone/repo", title="y", mtime=stamp[0], size=stamp[1]))
+        self.assertTrue(r.json()["ok"], r.json())
+        self.assertEqual(self.action("/api/task-settings", dict(body, workspace=5)).status, 400)
+
     def test_task_stage_and_waiting(self):
         stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
         r = self.action("/api/task-stage", {"task": "2026-11-20-a", "stage": "実装", "mtime": stamp[0],

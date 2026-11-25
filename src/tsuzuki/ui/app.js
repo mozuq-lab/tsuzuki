@@ -488,6 +488,7 @@ const ACTIONS = {
   // タスク
   "task-stage": (button) => writeTask("/api/task-stage", button, { stage: button.dataset.stage }),
   "task-waiting": (button) => openWaitingForm(button),
+  "task-settings": (button) => openSettings(button),
   "form-cancel": (button) => cancelForm(button),
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
@@ -961,6 +962,42 @@ function openWaitingForm(button) {
   if (reason) reason.focus();
 }
 
+// 「設定を変える」：題・チケット・リポジトリ・ワークスペースの入力欄を右に出す（# には残さない。
+// 一覧の行を選べばカードに戻る）。入力欄は開いた時点の task.md の更新時刻と大きさを持つ
+async function openSettings(button) {
+  const card = button.closest(".task-card");
+  if (!card) return;
+  const task = card.dataset.task;
+  if (!(await load("detail", "/frag/task-settings/" + encodeURIComponent(task)))) return;
+  const title = ui.detail.querySelector('#task-settings [name="title"]');
+  if (title) title.focus();
+}
+
+// 設定の入力欄の「保存」：入力欄の時刻と大きさを送る。書けたらカードを取り直して戻る。書けなかったときは
+// 入力欄のまま、サーバーの文を知らせに出す
+async function saveSettings(form) {
+  if (busyWriting()) return;
+  const data = new FormData(form);
+  const field = (name) => String(data.get(name) || "");
+  const submit = form.querySelector('[type="submit"]');
+  writing = true;
+  if (submit) submit.disabled = true;
+  let answer;
+  try {
+    answer = await postWrite("/api/task-settings", { task: form.dataset.task, title: field("title"),
+      ticket: field("ticket"), repo: field("repo"), workspace: field("workspace"),
+      mtime: Number(form.dataset.mtime), size: Number(form.dataset.size) });
+  } finally {
+    writing = false;
+    if (submit) submit.disabled = false;
+  }
+  if (!answer) return;
+  toast(answer.message);
+  if (!answer.ok) return;
+  panes.detail.url = null; // 入力欄から、同じ URL のカードへ戻す
+  await reloadTasks();
+}
+
 // 入力欄の「やめる」：設定の欄（#task-settings）は、カードを取り直して元に戻す。ほかの欄は閉じる
 function cancelForm(button) {
   const form = button.closest("form");
@@ -1098,6 +1135,9 @@ function onSubmit(event) {
   } else if (form.classList.contains("waiting-form")) {
     event.preventDefault();
     writeTask("/api/task-waiting", form, { waiting: form.dataset.waiting === "true", reason: form.elements.reason.value });
+  } else if (form.id === "task-settings") {
+    event.preventDefault();
+    saveSettings(form);
   }
 }
 

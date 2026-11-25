@@ -46,8 +46,8 @@ from tsuzuki.sources.live import LiveSession, live_sessions
 from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger
 from tsuzuki.taskindex import forget_task, refresh_task
 from tsuzuki.tasklinks import link_tasks, set_override
-from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, stage_label, within
-from tsuzuki.taskwrite import TaskWriteError, create_task, set_fields, set_waiting, trash_task
+from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, parse_task_md, stage_label, task_title, within
+from tsuzuki.taskwrite import TaskWriteError, create_task, set_fields, set_waiting, trash_task, update_settings
 
 TOKEN_FILE = "token"
 COOKIE = "tsuzuki_key"
@@ -115,6 +115,8 @@ NOT_A_PLACE = "リポジトリは場所の一覧から選んでください"
 TASK_MADE = "タスクを作りました"
 STAGE_SET = "段階を「%s」にしました"
 WAITING_SET = {True: "待ちにしました", False: "待ちを解きました"}
+SETTINGS_SET = "設定を変えました"
+NO_SETTINGS_CHANGE = "変わった所はありません"
 LINK_SET = {"add": "タスクに足しました", "remove": "タスクから外しました"}
 TASK_STATUSES = ("open", "done", "all")  # 一覧と左の状況の絞り込み（空は open）
 # http.server が自分で返す誤り（壊れた要求、知らない方法など）の文
@@ -757,6 +759,23 @@ def _frag_new_task(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> s
     return ui_tasks.frag_new_task(_repo_choices(app, conn))
 
 
+def _frag_task_settings(app: App, conn: sqlite3.Connection, name: str, p: _Params) -> str:
+    """タスクの設定（題・チケット・リポジトリ・ワークスペース）の入力欄。task.md をその場で読んで今の値を出す
+    （読めなければ 404）。"""
+    folder = _task_folder(conn, name)
+    if folder is None:
+        raise _HttpError(404, NOT_FOUND)
+    md = os.path.join(folder, TASK_MD)
+    try:
+        st = os.stat(md)
+        with open(md, "rb") as f:
+            tf = parse_task_md(f.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError):
+        raise _HttpError(404, NOT_FOUND)
+    return ui_tasks.frag_task_settings(name, tf, task_title(tf, name), repos=_repo_choices(app, conn),
+                                       mtime=st.st_mtime, size=st.st_size)
+
+
 def _task_status(p: _Params) -> str:
     return p.choice("status", TASK_STATUSES) or "open"
 
@@ -811,6 +830,7 @@ _FRAGMENTS = {
     "/frag/place/": ("number", _frag_place), "/frag/doc/": ("number", _frag_doc),
     "/frag/task-filters": (None, _frag_task_filters), "/frag/tasks": (None, _frag_tasks),
     "/frag/task/": ("task", _frag_task), "/frag/new-task": (None, _frag_new_task),
+    "/frag/task-settings/": ("task", _frag_task_settings),
 }  # type: Dict[str, Tuple[Optional[str], Callable[..., str]]]
 
 
@@ -886,6 +906,34 @@ def _api_task_waiting(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     return _write_task_md(app, task, lambda md, root: set_waiting(
         md, root, waiting=waiting, reason=reason, expect_mtime=mtime, expect_size=size, claude_dir=app.claude_dir),
         WAITING_SET[waiting])
+
+
+def _api_task_settings(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """題・チケット・リポジトリ・ワークスペースを task.md に書く。リポジトリは、空か、今の task.md の値か、
+    場所の一覧のものだけ。"""
+    task, title = _task_text(data, "task"), _task_text(data, "title")
+    ticket, repo, workspace = _task_text(data, "ticket"), _task_text(data, "repo"), _task_text(data, "workspace")
+    mtime, size = _task_stamp(data)
+    changed = []  # type: List[bool]
+
+    def write(md: Path, root: Path) -> None:
+        wanted = " ".join(repo.split())
+        if wanted:
+            try:
+                with open(str(md), "rb") as f:
+                    current = parse_task_md(f.read().decode("utf-8")).repo
+            except (OSError, UnicodeDecodeError):
+                current = None  # 読めないときは update_settings が断る
+            with app.connect() as conn:
+                if wanted != current and wanted not in {path for path, _ in _repo_choices(app, conn)}:
+                    raise TaskWriteError(NOT_A_PLACE)
+        changed.append(update_settings(md, root, title=title, ticket=ticket, repo=repo, workspace=workspace,
+                                       home=str(app.home), expect_mtime=mtime, expect_size=size,
+                                       claude_dir=app.claude_dir))
+    answer = _write_task_md(app, task, write, SETTINGS_SET)
+    if answer["ok"] and not any(changed):
+        answer["message"] = NO_SETTINGS_CHANGE
+    return answer
 
 
 def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1024,7 +1072,8 @@ def _finite(value: float) -> bool:
 
 _ACTIONS = {"/api/resume": _api_resume, "/api/open": _api_open, "/api/open-place": _api_open_place,
             "/api/reindex": _api_reindex, "/api/task-new": _api_task_new, "/api/task-stage": _api_task_stage,
-            "/api/task-waiting": _api_task_waiting, "/api/task-link": _api_task_link,
+            "/api/task-waiting": _api_task_waiting, "/api/task-settings": _api_task_settings,
+            "/api/task-link": _api_task_link,
             "/api/task-conversation": _api_task_conversation, "/api/task-trash": _api_task_trash,
             }  # type: Dict[str, Callable[[App, Dict[str, Any]], Dict[str, Any]]]
 

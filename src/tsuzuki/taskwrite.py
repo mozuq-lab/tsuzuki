@@ -1,6 +1,7 @@
 """タスクのフォルダーへ書き込む唯一のコード。
 
-書くのは「新しいタスクのフォルダーと task.md」と「既存の task.md の stage / waiting の行」だけ。
+書くのは「新しいタスクのフォルダーと task.md」と「既存の task.md の見出し情報の行と待っていることの欄」だけ。
+画面から変えるのは title / ticket / repo / workspace の行と、題が変わったときの本文の見出しだけ。
 あとは、頼まれたときにタスクのフォルダーをゴミ箱へ動かす（消さずに、動かすだけ）。
 """
 import os
@@ -11,19 +12,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from tsuzuki.tasks import _FENCE, _H1, _H2, SHARED_DIR, STAGES, TASK_MD, parse_task_md
+from tsuzuki.tasks import _FENCE, _H1, _H2, SHARED_DIR, STAGES, TASK_MD, parse_task_md, task_title
+from tsuzuki.workspace import WorkspaceError, first_folder
 
 CHANGED = "task.md が変わりました。読み直してください"
 NO_TRASH = "このディスクのゴミ箱が見つかりません。Finder でゴミ箱に入れてください"
 CANNOT_TRASH = "ゴミ箱に入れられませんでした（%s）。Finder でゴミ箱に入れてください"
 NOT_A_TASK_FOLDER = "ゴミ箱に入れられるのはタスクのフォルダーだけです: %s"
+BAD_WORKSPACE = "ワークスペースを使えません: %s"
 BAD_SECTION_LINE = "見出しやコードの囲みになる行は書けません: %s"
 WAITING_SECTION = "待っていること"
 NOTHING = "なし"
 _BOM = "﻿"
 _SECTION_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
-_ALLOWED_KEYS = ("stage", "waiting")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_ALLOWED_KEYS = ("stage", "waiting", "title", "ticket", "repo", "workspace")
+_TEXT_KEYS = ("title", "ticket", "repo", "workspace")  # 1行の文字の値：改行と制御文字は断る
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")  # splitlines が行の切れ目にする U+0085・U+2028・U+2029 を含む
 
 
 class TaskWriteError(Exception):
@@ -168,7 +172,9 @@ def set_fields(task_md: Path, tasks_root: Path, changes: Dict[str, str], *, expe
                expect_size: Optional[int] = None, claude_dir: Optional[Path] = None) -> None:
     for key, value in changes.items():
         if key not in _ALLOWED_KEYS:
-            raise TaskWriteError("変えられる項目は stage と waiting だけです: %s" % key)
+            raise TaskWriteError("変えられない項目です: %s" % key)
+        if key in _TEXT_KEYS and _CONTROL.search(value):
+            raise TaskWriteError("%s に改行や制御文字は使えません" % key)
         if key == "stage" and value not in STAGES:
             raise TaskWriteError("段階の値が正しくありません: %s" % value)
         if key == "waiting" and value not in ("true", "false"):
@@ -187,6 +193,75 @@ def set_waiting(task_md: Path, tasks_root: Path, *, waiting: bool, reason: Optio
         new = _rewrite(text, {"waiting": "true" if waiting else "false"})
         return new if content is None else replace_section(new, WAITING_SECTION, content)
     _edit(task_md, tasks_root, transform, expect_mtime=expect_mtime, expect_size=expect_size, claude_dir=claude_dir)
+
+
+def normalize_workspace(value: str, *, home: str) -> Optional[str]:
+    """ワークスペースのパス。空なら None。~ は home で展開し、絶対パスの .code-workspace で、普通のファイルで、
+    最初のフォルダーがあるものだけを、normpath した絶対パスで返す。それ以外は TaskWriteError。"""
+    value = value.strip()
+    if not value:
+        return None
+    if _CONTROL.search(value):
+        raise TaskWriteError(BAD_WORKSPACE % "改行や制御文字は使えません")
+    if value == "~" or value.startswith("~/"):
+        value = home.rstrip("/") + value[1:]
+    if not os.path.isabs(value):
+        raise TaskWriteError(BAD_WORKSPACE % "絶対パスで指定してください")
+    path = os.path.normpath(value)
+    if not path.endswith(".code-workspace"):
+        raise TaskWriteError(BAD_WORKSPACE % ".code-workspace のファイルを指定してください")
+    if not os.path.isfile(path):
+        raise TaskWriteError(BAD_WORKSPACE % "ファイルがありません")
+    try:
+        first_folder(path)
+    except WorkspaceError as e:
+        raise TaskWriteError(BAD_WORKSPACE % e)
+    return path
+
+
+def update_settings(task_md: Path, tasks_root: Path, *, title: str, ticket: str, repo: str, workspace: str, home: str,
+                    expect_mtime: Optional[float] = None, expect_size: Optional[int] = None,
+                    claude_dir: Optional[Path] = None) -> bool:
+    """題・チケット・リポジトリ・ワークスペースのうち、今と違う項目の行だけを書く。題が変われば、本文の
+    見出し（今の題と同じときだけ）も同じ置き換えで変える。書いたら True、変わった所がなければ書かずに False。
+    値のそろえと確かめは、書く前にすべて済ませる。"""
+    for value in (title, ticket, repo, workspace):
+        if _CONTROL.search(value):
+            raise TaskWriteError("改行や制御文字は使えません")
+    new_title = _one_line(title)
+    if not new_title:
+        raise TaskWriteError("題を入れてください")
+    new_ticket = normalize_ticket(ticket)
+    if new_ticket:
+        new_ticket = new_ticket.replace('"', "")
+    new_repo = _one_line(repo)
+    new_workspace = normalize_workspace(workspace, home=home)
+    folder = task_md.parent.name
+
+    class _Unchanged(Exception):
+        pass
+
+    def transform(text: str) -> str:
+        tf = parse_task_md(text)
+        changes = {}  # type: Dict[str, str]
+        if new_title != (tf.title or ""):
+            changes["title"] = new_title
+        if new_ticket != tf.ticket:
+            changes["ticket"] = '"%s"' % new_ticket if new_ticket else ""
+        if new_repo != (tf.repo or ""):
+            changes["repo"] = new_repo
+        if new_workspace != tf.workspace:
+            changes["workspace"] = new_workspace or ""
+        if not changes:
+            raise _Unchanged()
+        out = _rewrite(text, changes)
+        return replace_heading(out, task_title(tf, folder), new_title) if "title" in changes else out
+    try:
+        _edit(task_md, tasks_root, transform, expect_mtime=expect_mtime, expect_size=expect_size,
+              claude_dir=claude_dir)
+    except _Unchanged:
+        return False
+    return True
 
 
 def _edit(task_md: Path, tasks_root: Path, transform: Callable[[str], str], *, expect_mtime: Optional[float],
@@ -284,6 +359,41 @@ def replace_section(text: str, name: str, content: str) -> str:
     return bom + "".join(lines)
 
 
+def replace_heading(text: str, old: str, new: str) -> str:
+    """task.md の全文の、本文の最初の「# 見出し」（コードの囲みの外。parse_task_md の heading と同じ行）が old と
+    同じときだけ、「# new」にする。囲みが閉じないまま見出しに着かなければ、何も変えない。"""
+    bom = _BOM if text.startswith(_BOM) else ""
+    lines = text[len(bom):].splitlines(True)  # type: List[str]  # parse_task_md と同じ行の切り方
+    start = 0
+    if lines and lines[0].strip() == "---":
+        close = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+        if close is None:
+            return text
+        start = close + 1
+    fence = None  # type: Optional[str]
+    for i in range(start, len(lines)):
+        line = _bare(lines[i])
+        if fence is not None:
+            s = line.strip()
+            if len(s) >= len(fence) and s == fence[0] * len(s):
+                fence = None
+            continue
+        opened = _FENCE.match(line)
+        if opened:
+            fence = opened.group(1)
+        m = _H1.match(line)
+        if m:
+            if m.group(1) == old:
+                lines[i] = "# %s%s" % (new, lines[i][len(line):])
+            break
+    return bom + "".join(lines)
+
+
+def _line(key: str, value: str) -> str:
+    """見出し情報の1行（行末は含まない）。値が空なら「key:」だけにする（雛形と同じ）。"""
+    return "%s: %s" % (key, value) if value else key + ":"
+
+
 def _rewrite(text: str, changes: Dict[str, str]) -> str:
     bom = _BOM if text.startswith(_BOM) else ""
     body = text[len(bom):]
@@ -291,7 +401,7 @@ def _rewrite(text: str, changes: Dict[str, str]) -> str:
     nl = "\r\n" if first_break > 0 and body[first_break - 1] == "\r" else "\n"
     lines = re.findall(r"[^\n]*\n|[^\n]+", body)  # type: List[str]
     if not lines or lines[0].strip() != "---":
-        block = "".join("%s: %s%s" % (k, v, nl) for k, v in changes.items())
+        block = "".join(_line(k, v) + nl for k, v in changes.items())
         return bom + "---" + nl + block + "---" + nl + body
     close = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
     if close is None:
@@ -301,11 +411,11 @@ def _rewrite(text: str, changes: Dict[str, str]) -> str:
         key = lines[i].partition(":")[0].strip() if ":" in lines[i] else None
         if key in pending:
             ending = lines[i][len(lines[i].rstrip("\r\n")):]
-            lines[i] = "%s: %s%s" % (key, pending.pop(key), ending)
+            lines[i] = _line(key, pending.pop(key)) + ending
     if pending:
         if not lines[close - 1].endswith("\n") and close > 1:
             lines[close - 1] += nl
-        lines[close:close] = ["%s: %s%s" % (k, v, nl) for k, v in pending.items()]
+        lines[close:close] = [_line(k, v) + nl for k, v in pending.items()]
     return bom + "".join(lines)
 
 

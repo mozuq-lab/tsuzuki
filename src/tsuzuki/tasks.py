@@ -37,6 +37,7 @@ class TaskFile:
     waiting: bool = False
     repo: Optional[str] = None
     branch: Optional[str] = None
+    workspace: Optional[str] = None
     created: Optional[str] = None
     updated: Optional[str] = None
     heading: Optional[str] = None
@@ -82,6 +83,7 @@ def parse_task_md(text: str) -> TaskFile:
         tf.ticket = meta.get("ticket") or None
         tf.repo = meta.get("repo") or None
         tf.branch = meta.get("branch") or None
+        tf.workspace = meta.get("workspace") or None
         tf.created = meta.get("created") or None
         tf.updated = meta.get("updated") or None
         tf.waiting = meta.get("waiting", "").lower() == "true"

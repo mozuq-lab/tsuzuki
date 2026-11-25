@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MAKE_DEMO = ROOT / "scripts" / "make_demo.py"
 # 断片の data-action（タスクの操作を含む）。app.js はすべてを受け持つ
 ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans", "open-doc", "open-place", "docs",
-           "fold", "read-more", "task-stage", "task-waiting", "copy-picked", "task-unlink", "task-conversation",
+           "fold", "read-more", "task-stage", "task-waiting", "task-settings", "copy-picked", "task-unlink", "task-conversation",
            "new-task", "task-open", "task-link", "task-trash", "form-cancel"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
 HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
@@ -386,6 +386,12 @@ class TaskViewAssetsTest(unittest.TestCase):
         for part in ('"waiting-form"', '"/api/task-waiting"', "reason:"):
             self.assertIn(part, submit)
         self.assertIn('"form-cancel": (button) => cancelForm(button)', js)
+        self.assertIn('"task-settings": (button) => openSettings(button)', js)
+        self.assertIn('load("detail", "/frag/task-settings/" + encodeURIComponent(task))', _function(js, "openSettings"))
+        self.assertIn("saveSettings(form)", submit)
+        save = _function(js, "saveSettings")
+        for part in ('"/api/task-settings"', "mtime: Number(", "size: Number(", "workspace:", "reloadTasks()"):
+            self.assertIn(part, save)
         cancel = _function(js, "cancelForm")
         self.assertIn('"task-settings"', cancel)
         self.assertIn('load("detail", detailUrl(state), true)', cancel)

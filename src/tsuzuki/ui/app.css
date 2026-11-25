@@ -625,7 +625,7 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 }
 .cp:hover:not(:disabled) { border-color: var(--accent); }
 .cp:disabled { opacity: .45; cursor: default; }
-.task-card .foot { display: flex; justify-content: flex-end; margin-top: .9rem; padding-top: .6rem; border-top: 1px solid var(--border); }
+.task-card .foot { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .9rem; padding-top: .6rem; border-top: 1px solid var(--border); }
 .task-card .link > .more { margin-left: auto; }  /* 会話の行の「外す」は右の端に */
 
 /* 右：新しいタスクの入力欄 */
@@ -651,6 +651,8 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 }
 .new-task .note { margin: -.2rem 0 .45rem calc(6rem + .6rem); }
 .new-task .btns { justify-content: flex-start; margin-top: .7rem; padding-left: calc(6rem + .6rem); }
+.task-settings .kv { grid-template-columns: 7.5rem minmax(0, 1fr); }
+.task-settings .note, .task-settings .btns { margin-left: 0; padding-left: calc(7.5rem + .6rem); }
 
 /* 右：会話 */
 

@@ -8,9 +8,9 @@ from html.parser import HTMLParser
 
 from tsuzuki.render import fmt_local
 from tsuzuki.retention import iso_utc
-from tsuzuki.tasks import STAGES, stage_label
+from tsuzuki.tasks import STAGES, TaskFile, stage_label
 from tsuzuki.taskviews import TaskDetail, TaskFileItem, TaskRow, TaskSessionItem
-from tsuzuki.ui_tasks import at_reference, frag_new_task, frag_task_card, frag_task_filters, frag_task_list
+from tsuzuki.ui_tasks import at_reference, frag_new_task, frag_task_card, frag_task_settings, frag_task_filters, frag_task_list
 from tsuzuki.views import SessionRow
 from tests.fixtures import sid, t
 
@@ -27,7 +27,7 @@ ALLOWED_TAGS = {"div", "span", "em", "h4", "button", "br", "p", "ul", "ol", "li"
                 "table", "thead", "tbody", "tr", "th", "td", "strong", "a", "h1", "h2", "h3", "h5", "h6", "input",
                 "form", "label", "select", "option", "textarea"}
 ALLOWED_ATTRS = {"class", "id", "disabled", "title", "href", "rel", "target", "align", "start", "aria-label", "type",
-                 "name", "value", "required", "maxlength", "placeholder", "autocomplete", "spellcheck", "rows", "hidden"}
+                 "name", "value", "required", "maxlength", "placeholder", "autocomplete", "spellcheck", "rows", "hidden", "selected"}
 
 
 class Markup(HTMLParser):
@@ -546,6 +546,44 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertIn('<button type="submit" class="btn pri">作る</button>', html)
         self.assertIn('<option value="">なし</option></select>', frag_new_task([]))
 
+    # 設定を変える
+
+    def test_settings_form(self):
+        tf = TaskFile(title=EVIL, ticket=EVIL, repo=EVIL, workspace=EVIL)
+        html = frag_task_settings(EVIL_NAME, tf, EVIL, repos=[("/w/x", "x")], mtime=1795243515.25, size=321)
+        m = self.assertSafe(html)
+        self.assertEqual(m.tags[0][0], "form")
+        form = m.tags[0][1]
+        self.assertEqual((form["id"], form["data-task"], form["data-mtime"], form["data-size"]),
+                         ("task-settings", EVIL_NAME, "1795243515.25", "321"))
+        self.assertEqual([a["name"] for tag, a in m.tags if tag in ("input", "select")],
+                         ["title", "ticket", "repo", "workspace"])
+        self.assertEqual(m.tags_with("name", "title")[0][1]["value"], EVIL)
+        self.assertEqual(m.tags_with("name", "ticket")[0][1]["value"], EVIL)
+        self.assertEqual(m.tags_with("name", "workspace")[0][1]["value"], EVIL)
+        self.assertEqual(m.tags_with("name", "workspace")[0][1]["placeholder"], "~/dev/app.code-workspace（任意）")
+        options = [a for tag, a in m.tags if tag == "option"]
+        self.assertEqual([a.get("value") for a in options], ["", EVIL, "/w/x"])
+        self.assertIn("selected", options[1])
+        self.assertNotIn("selected", options[0])
+        self.assertIn('<button type="submit" class="btn pri">保存</button>', html)
+        self.assertIn('data-action="form-cancel">やめる</button>', html)
+        # 今の repo が一覧にあれば、その option が選ばれ、足さない
+        again = Markup(frag_task_settings("a", TaskFile(title="t", repo="/w/x"), "t", repos=[("/w/x", "x")],
+                                          mtime=1.0, size=1))
+        options = [a for tag, a in again.tags if tag == "option"]
+        self.assertEqual([a.get("value") for a in options], ["", "/w/x"])
+        self.assertIn("selected", options[1])
+        # repo がなければ「なし」が選ばれる
+        none = Markup(frag_task_settings("a", TaskFile(title="t"), "t", repos=[], mtime=1.0, size=1))
+        self.assertIn("selected", [a for tag, a in none.tags if tag == "option"][0])
+
+    def test_card_foot_order(self):
+        html = frag_task_card(make_detail(), resume_default="vscode", home=HOME)
+        foot = html[html.index('<div class="foot">'):]
+        self.assertLess(foot.index('data-action="task-settings"'), foot.index('data-action="task-trash"'))
+        self.assertIn("設定を変える</button>", foot)
+
     # エスケープ
 
     def test_every_fragment_escapes_hostile_text(self):
@@ -567,6 +605,8 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
             "card": frag_task_card(detail, resume_default="vscode", home=HOME),
             "card-copy": frag_task_card(detail, resume_default="copy", resume_command=EVIL),
             "new": frag_new_task([(EVIL, EVIL)]),
+            "settings": frag_task_settings(EVIL_NAME, TaskFile(title=EVIL, repo=EVIL), EVIL, repos=[(EVIL, EVIL)],
+                                           mtime=1.5, size=2),
         }
         for name, fragment in fragments.items():
             with self.subTest(fragment=name):

@@ -11,7 +11,8 @@ from tsuzuki.tasks import parse_task_md
 from tsuzuki import taskwrite
 from tsuzuki.taskwrite import (BAD_SECTION_LINE, CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
                               find_trash, normalize_short_name, normalize_ticket, render_task_md, section_text,
-                              set_fields, set_waiting, trash_task)
+                              set_fields, set_waiting, trash_task, BAD_WORKSPACE, normalize_workspace,
+                              replace_heading, update_settings)
 from tests.fixtures import allow_system_tmp, run_cli
 
 TEMPLATE = (
@@ -145,7 +146,7 @@ class SetFieldsTest(_TmpCase):
 
     def test_rejects_bad_values_and_keys(self):
         md = self.task_md("---\nstage: 調査\n---\n")
-        for changes in ({"stage": "実装中"}, {"waiting": "yes"}, {"title": "x"}):
+        for changes in ({"stage": "実装中"}, {"waiting": "yes"}, {"branch": "x"}, {"title": "a\nb"}):
             with self.assertRaises(TaskWriteError, msg=str(changes)):
                 set_fields(md, self.root, changes)
 
@@ -160,6 +161,146 @@ class SetFieldsTest(_TmpCase):
         os.chmod(str(md), 0o640)
         set_fields(md, self.root, {"waiting": "true"})
         self.assertEqual(stat.S_IMODE(md.stat().st_mode), 0o640)
+
+
+class SettingsTest(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.root.mkdir()
+        (self.base / "app").mkdir()
+        (self.base / "w").mkdir()
+        self.ws = self.base / "w" / "a.code-workspace"
+        self.ws.write_text('{"folders": [{"path": "../app"}]}', encoding="utf-8")
+
+    def task_md(self, text=TEMPLATE):
+        d = self.root / "2026-11-22-x"
+        d.mkdir(exist_ok=True)
+        md = d / "task.md"
+        md.write_bytes(text.encode("utf-8"))
+        return md
+
+    def update(self, md, **kw):
+        values = dict(title="ログインの期限", ticket="#123", repo="/Users/me/dev/web-app", workspace="",
+                      home=str(self.base))
+        values.update(kw)
+        return update_settings(md, self.root, **values)
+
+    def test_only_changed_lines_are_written(self):
+        md = self.task_md()
+        self.assertTrue(self.update(md, title="新しい題"))
+        self.assertEqual(md.read_text(encoding="utf-8"),
+                         TEMPLATE.replace("title: ログインの期限", "title: 新しい題").replace("# ログインの期限", "# 新しい題"))
+
+    def test_nothing_changed_writes_nothing(self):
+        md = self.task_md()
+        before = md.stat().st_mtime_ns
+        self.assertFalse(self.update(md))
+        self.assertEqual(md.stat().st_mtime_ns, before)
+        self.assertEqual(md.read_text(encoding="utf-8"), TEMPLATE)
+
+    def test_heading_is_kept_when_it_differs(self):
+        text = TEMPLATE.replace("# ログインの期限\n", "# 別の見出し\n")
+        md = self.task_md(text)
+        self.assertTrue(self.update(md, title="新しい題"))
+        self.assertEqual(md.read_text(encoding="utf-8"), text.replace("title: ログインの期限", "title: 新しい題"))
+
+    def test_heading_follows_the_card_title_without_a_frontmatter_title(self):
+        text = "---\nstage: 調査\n---\n```\n# 囲みの中\n```\n# 見出し\n本文\n"
+        md = self.task_md(text)
+        self.update(md, title="見出し", ticket="", repo="")  # 題は変わらないので見出しも同じ
+        self.assertIn("# 見出し\n", md.read_text(encoding="utf-8"))
+        self.update(md, title="変えた", ticket="", repo="")
+        out = md.read_text(encoding="utf-8")
+        self.assertIn("```\n# 囲みの中\n```\n# 変えた\n本文\n", out)
+
+    def test_unclosed_fence_before_heading_leaves_it(self):
+        text = TEMPLATE.replace("# ログインの期限\n", "```\n# ログインの期限\n")
+        md = self.task_md(text)
+        self.assertTrue(self.update(md, title="新しい題"))
+        self.assertEqual(md.read_text(encoding="utf-8"), text.replace("title: ログインの期限", "title: 新しい題"))
+
+    def test_replace_heading_keeps_bom_and_line_endings(self):
+        text = "﻿---\r\ntitle: a\r\n---\r\n# a\r\n本文\r\n"
+        self.assertEqual(replace_heading(text, "a", "b"), text.replace("# a", "# b"))
+        self.assertEqual(replace_heading("# a\n# a\n", "a", "b"), "# b\n# a\n")
+        self.assertEqual(replace_heading("# x\n", "a", "b"), "# x\n")
+
+    def test_ticket_and_repo_and_workspace(self):
+        md = self.task_md()
+        self.update(md, ticket="１２３４", repo="/r/other")
+        text = md.read_text(encoding="utf-8")
+        self.assertIn('ticket: "#1234"\n', text)
+        self.assertIn("repo: /r/other\n", text)
+        self.assertNotIn("workspace:", text)
+        self.update(md, ticket="#123", repo="/r/other", workspace="~/w/a.code-workspace")
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("workspace: %s\n" % self.ws, text)
+        self.assertEqual(parse_task_md(text).workspace, str(self.ws))
+        self.update(md, ticket="", repo="/r/other", workspace="")
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("\nworkspace:\n", text)
+        self.assertIn("ticket:\n", text)
+        self.assertIsNone(parse_task_md(text).ticket)
+
+    def test_bad_workspace_is_refused(self):
+        md = self.task_md()
+        before = md.read_bytes()
+        (self.base / "w" / "plain.txt").write_text("{}", encoding="utf-8")
+        (self.base / "w" / "none.code-workspace").write_text('{"folders": [{"path": "../nope"}]}', encoding="utf-8")
+        for bad in ("~/w/plain.txt", "~/w/missing.code-workspace", "~/w/none.code-workspace", "w/a.code-workspace",
+                    str(self.base / "w")):
+            with self.assertRaises(TaskWriteError, msg=bad) as cm:
+                self.update(md, title="新しい題", workspace=bad)
+            self.assertTrue(str(cm.exception).startswith(BAD_WORKSPACE % ""), str(cm.exception))
+            self.assertEqual(md.read_bytes(), before)
+        self.assertIsNone(normalize_workspace("  ", home=str(self.base)))
+
+    def test_settings_refuse_a_stale_form(self):
+        md = self.task_md()
+        st = md.stat()
+        before = md.read_bytes()
+        with self.assertRaises(TaskWriteError) as cm:
+            self.update(md, title="新しい題", expect_mtime=st.st_mtime + 1, expect_size=st.st_size)
+        self.assertEqual(str(cm.exception), CHANGED)
+        with self.assertRaises(TaskWriteError) as cm:
+            self.update(md, title="新しい題", expect_mtime=st.st_mtime, expect_size=st.st_size + 1)
+        self.assertEqual(str(cm.exception), CHANGED)
+        self.assertEqual(md.read_bytes(), before)
+        self.assertTrue(self.update(md, title="新しい題", expect_mtime=st.st_mtime, expect_size=st.st_size))
+
+    def test_control_characters_are_refused(self):
+        md = self.task_md()
+        before = md.read_bytes()
+        for field, value in (("title", "題\x07"), ("repo", "/r\n/x"), ("ticket", "#1\x00"), ("title", "a\nb")):
+            with self.assertRaises(TaskWriteError, msg=field):
+                self.update(md, **{field: value})
+        with self.assertRaises(TaskWriteError) as cm:
+            self.update(md, title="  ")
+        self.assertEqual(str(cm.exception), "題を入れてください")
+        self.assertEqual(md.read_bytes(), before)
+
+    def test_line_separators_are_refused(self):
+        md = self.task_md()
+        before = md.read_bytes()
+        for sep in ("\u2028", "\u2029", "\x85"):
+            d = self.base / ("w stage: 完了 ---%s z" % sep)
+            d.mkdir()
+            ws = d / "a.code-workspace"
+            ws.write_text('{"folders": [{"path": "%s"}]}' % self.base, encoding="utf-8")
+            with self.assertRaises(TaskWriteError, msg=repr(sep)):
+                self.update(md, workspace=str(ws))
+            for field in ("title", "ticket", "repo"):
+                with self.assertRaises(TaskWriteError, msg=field):
+                    self.update(md, **{field: "a%sb" % sep})
+            with self.assertRaises(TaskWriteError):
+                set_fields(md, self.root, {"repo": "a%sb" % sep})
+        self.assertEqual(md.read_bytes(), before)
+
+    def test_only_allowed_keys_are_settable(self):
+        md = self.task_md()
+        set_fields(md, self.root, {"title": "x", "workspace": "/a.code-workspace"})
+        with self.assertRaises(TaskWriteError):
+            set_fields(md, self.root, {"branch": "x"})
 
 
 class WaitingTest(_TmpCase):

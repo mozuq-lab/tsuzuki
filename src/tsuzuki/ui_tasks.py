@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from tsuzuki.render import fmt_local, render_markdown, render_plain
 from tsuzuki.retention import iso_utc
-from tsuzuki.tasks import SHARED_DIR, STAGES, at_reference, no_waiting, stage_label, ticket_numbers
+from tsuzuki.tasks import SHARED_DIR, STAGES, TaskFile, at_reference, no_waiting, stage_label, ticket_numbers
 from tsuzuki.taskviews import (DOC_BUNDLE_LIMIT, STATUS_LABELS, TASK_FILES_LIMIT, TaskDetail, TaskFileItem, TaskRow,
                               TaskSessionItem)
 from tsuzuki.ui_render import NO_RESUME, _attrs, _badges, _button, _e, _filter_row, _join, _n, _period, _tilde
@@ -140,13 +140,15 @@ def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = 
 
 
 def _foot(d: TaskDetail, home: Optional[str]) -> str:
-    """カードの一番下：「ゴミ箱に入れる」（押すと確かめてから、フォルダーごとゴミ箱へ動かす）。"""
+    """カードの一番下：「設定を変える」（題などの入力欄を開く）と「ゴミ箱に入れる」（押すと確かめてから、
+    フォルダーごとゴミ箱へ動かす）。"""
     place = _tilde(d.path, home) if home else d.path
     confirm = "「%s」のフォルダー（%s）を、中のファイルごとゴミ箱に入れます。" % (d.row.title, place)
     if d.row.live:
         confirm += "このタスクの会話が実行中です。"
-    return '<div class="foot">%s</div>' % _button("ゴミ箱に入れる", "btn", ("data-action", "task-trash"),
-                                                 ("data-confirm", confirm))
+    return '<div class="foot">%s%s</div>' % (
+        _button("設定を変える", "btn", ("data-action", "task-settings")),
+        _button("ゴミ箱に入れる", "btn", ("data-action", "task-trash"), ("data-confirm", confirm)))
 
 
 def _card_buttons(d: TaskDetail, default: str, command: Optional[str]) -> str:
@@ -349,6 +351,41 @@ def frag_new_task(repos: List[Tuple[str, str]]) -> str:
         '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
         '<div class="btns"><button type="submit" class="btn pri">作る</button></div>'
         '</form>' % "".join(options))
+
+
+# 右：タスクの設定
+
+def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple[str, str]], mtime: float,
+                       size: int) -> str:
+    """タスクの設定の入力欄：題・チケット・リポジトリ（場所の一覧から。今の値が一覧になければ、先頭の近くに
+    選んだ状態で足す）・ワークスペース。tf は task.md の今の値、title は今の題。data-mtime・data-size は読んだときの
+    task.md の更新時刻（repr）と大きさで、送り返して、その後に書き換わっていないか確かめる。"""
+    repo = tf.repo or ""
+    paths = [path for path, _ in repos]
+    options = ['<option value=""%s>なし</option>' % ("" if repo else " selected")]
+    if repo and repo not in paths:
+        options.append("<option%s>%s</option>" % (_attrs(("value", repo), ("title", repo)) + " selected", _e(repo)))
+    for path, display in repos:
+        options.append("<option%s>%s</option>" % (
+            _attrs(("value", path), ("title", path)) + (" selected" if path == repo else ""), _e(display)))
+    return (
+        '<form%s autocomplete="off">'
+        '<div class="dh"><div class="head"><h4>設定を変える</h4></div></div>'
+        '<label class="kv"><span class="k">題</span><input%s></label>'
+        '<label class="kv"><span class="k">チケット</span><input%s></label>'
+        '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
+        '<label class="kv"><span class="k">ワークスペース</span><input%s></label>'
+        '<div class="note">ワークスペースは .code-workspace のパスです。VS Code で開くときの場所になります</div>'
+        '<div class="btns"><button type="submit" class="btn pri">保存</button>'
+        '<button type="button" class="btn" data-action="form-cancel">やめる</button></div>'
+        "</form>" % (
+            _attrs(("id", "task-settings"), ("class", "new-task task-settings"), ("data-task", name),
+                   ("data-mtime", repr(mtime)), ("data-size", size)),
+            _attrs(("name", "title"), ("value", title), ("maxlength", 200), ("required", "")),
+            _attrs(("name", "ticket"), ("value", tf.ticket or ""), ("maxlength", 200), ("placeholder", "#123（任意）")),
+            "".join(options),
+            _attrs(("name", "workspace"), ("value", tf.workspace or ""), ("maxlength", 1000), ("spellcheck", "false"),
+                   ("placeholder", "~/dev/app.code-workspace（任意）"))))
 
 
 # 部品
