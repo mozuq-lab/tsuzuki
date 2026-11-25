@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from tsuzuki.privacy import os_error_text
 from tsuzuki.tasks import _FENCE, _H1, _H2, STAGES, TASK_MD, is_task_dir_name, parse_task_md, task_title
 from tsuzuki.workspace import WorkspaceError, first_folder
 
@@ -166,7 +167,7 @@ def copy_into_task(task_dir: str, tasks_root: Path, source: str, *, claude_dir: 
                 os.unlink(dest)
             except OSError:
                 pass
-            raise TaskWriteError(CANNOT_COPY % (e.strerror or e))
+            raise TaskWriteError(CANNOT_COPY % os_error_text(e))
         return dest
     raise TaskWriteError(CANNOT_COPY % "同じ名前のファイルが多すぎます")
 

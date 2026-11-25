@@ -46,6 +46,7 @@ class InfoPlistTest(unittest.TestCase):
             "NSHighResolutionCapable": True,
             "NSPrincipalClass": "NSApplication",
             "NSAppleEventsUsageDescription": "Terminal で Claude Code のセッションを再開するために使います。",
+            "NSRemovableVolumesUsageDescription": "外付けのディスクにある資料やワークスペースを読むために使います。",
         })
 
 

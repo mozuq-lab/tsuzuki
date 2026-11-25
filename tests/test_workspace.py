@@ -1,9 +1,12 @@
+import errno
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from tsuzuki.privacy import PRIVACY_HINT
 from tsuzuki.workspace import WorkspaceError, first_folder, strip_jsonc
 
 
@@ -32,6 +35,17 @@ class WorkspaceTest(unittest.TestCase):
         text = '{"path": "http://x//y", "a": "/* no */, ]"}'
         self.assertEqual(json.loads(strip_jsonc(text)), {"path": "http://x//y", "a": "/* no */, ]"})
         self.assertEqual(json.loads(strip_jsonc('{"a": "q\\"//z",}')), {"a": 'q"//z'})
+
+    def test_blocked_read_points_to_the_privacy_setting(self):
+        path = self.write("{}")
+        with mock.patch("builtins.open", side_effect=PermissionError(errno.EPERM, "Operation not permitted", path)):
+            with self.assertRaises(WorkspaceError) as cm:
+                first_folder(path)
+        self.assertTrue(str(cm.exception).startswith("読めません（"), str(cm.exception))
+        self.assertIn(PRIVACY_HINT, str(cm.exception))
+        with self.assertRaises(WorkspaceError) as cm:
+            first_folder(str(self.base / "missing.code-workspace"))
+        self.assertNotIn(PRIVACY_HINT, str(cm.exception))
 
     def test_errors(self):
         with self.assertRaises(WorkspaceError) as cm:

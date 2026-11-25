@@ -2,6 +2,8 @@
 import json
 import os
 
+from tsuzuki.privacy import os_error_text
+
 
 class WorkspaceError(Exception):
     pass
@@ -60,7 +62,9 @@ def first_folder(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as f:
             text = f.read()
-    except (OSError, UnicodeDecodeError) as e:
+    except OSError as e:
+        raise WorkspaceError("読めません（%s）" % os_error_text(e))
+    except UnicodeDecodeError as e:
         raise WorkspaceError("読めません（%s）" % e)
     try:
         data = json.loads(strip_jsonc(text))

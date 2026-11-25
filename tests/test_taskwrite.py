@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import stat
@@ -7,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
 
+from tsuzuki.privacy import PRIVACY_HINT
 from tsuzuki.tasks import parse_task_md
 from tsuzuki import taskwrite
 from tsuzuki.taskwrite import (ALREADY_IN_TASK, BAD_SECTION_LINE, CANNOT_COPY, NOT_A_COPY_TARGET, NOT_A_FILE, CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
@@ -532,6 +534,21 @@ class CopyTest(_TmpCase):
         with self.assertRaises(TaskWriteError) as cm:
             self.copy(link)
         self.assertEqual(str(cm.exception), ALREADY_IN_TASK)
+
+    def test_blocked_source_read_points_to_the_privacy_setting(self):
+        real_open = open
+
+        def blocked(path, *a, **kw):
+            if str(path) == os.path.realpath(str(self.src)):
+                raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
+            return real_open(path, *a, **kw)
+
+        with mock.patch("builtins.open", side_effect=blocked):
+            with self.assertRaises(TaskWriteError) as cm:
+                self.copy()
+        self.assertTrue(str(cm.exception).startswith(CANNOT_COPY % ""), str(cm.exception))
+        self.assertIn(PRIVACY_HINT, str(cm.exception))
+        self.assertEqual(sorted(p.name for p in self.folder.iterdir()), ["task.md"])
 
     def test_copy_failure_removes_the_partial_file(self):
         with mock.patch("tsuzuki.taskwrite.shutil.copyfileobj", side_effect=OSError(28, "No space left")):
