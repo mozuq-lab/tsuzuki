@@ -183,6 +183,19 @@ class UiRenderTest(SafeMarkup, Ledger):
             self.assertIn(part, html)
         self.assertRegex(html, r'class="[^"]*pri[^"]*"[^>]*data-how="vscode"|data-how="vscode"[^>]*class="[^"]*pri')
 
+    def test_open_conversation_follows_the_last_prompt(self):
+        html = frag_card(detail(), resume_default="vscode")
+        self.assertNotIn('<div class="foot">', html)
+        last = html.index("最後の依頼")
+        button = html.index('data-action="conversation"')
+        self.assertLess(last, button)
+        self.assertRegex(html[last:button], r'^最後の依頼.*?</div><div class="go"><button[^>]*$')
+        self.assertEqual(html.count('data-action="conversation"'), 1)
+        hit = frag_card(detail(), resume_default="vscode", hit_turns=[3])
+        self.assertEqual(hit.count('data-action="conversation"'), 2)
+        self.assertLess(hit.index('class="excerpt"') if 'class="excerpt"' in hit else 0,
+                        hit.index('data-action="conversation"'))
+
     def test_card_task_row_and_add(self):
         html = frag_card(detail(tasks=[("a", "A の題", "フォルダーで開始", "確定")]), resume_default="vscode")
         self.assertIn('data-action="task-open"', html)
@@ -429,9 +442,9 @@ class UiRenderTest(SafeMarkup, Ledger):
         self.assertIn('<div class="card" data-session="%s" data-turns="" data-index="0">' % S1, html)
         self.assertIn('<button class="btn" data-action="conversation" data-session="%s" data-turn="">会話で開く'
                       '</button>' % S1, html)
-        # 題名・場所など・再開・要約・最初と最後の依頼・資料・つながり・会話で開く の順
+        # 題名・場所など・再開・要約・最初と最後の依頼・会話で開く・資料・つながり の順
         parts = ("<h4>", '<div class="meta">', 'data-action="resume"', "直近の要約", "最初の依頼", "最後の依頼",
-                 "資料 7件", "つながり", "会話で開く")
+                 "会話で開く", "資料 7件", "つながり")
         positions = [html.index(p) for p in parts]
         self.assertEqual(positions, sorted(positions))
         # 要約がなければ最後の応答。つながりも資料もなければそう書く

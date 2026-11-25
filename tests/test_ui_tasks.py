@@ -273,12 +273,29 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
                                         'data-size="321">'), html[:200])
         self.assertIn("<h4>ログインのセッション切れを延ばす</h4>", html)
         meta = re.search(r'<div class="meta">(.*?)</div>', html).group(1)
+        meta = re.sub(r"<button.*?</button>", "", meta)  # パスの後ろのコピーのボタンは別に調べる
         self.assertEqual(htmllib.unescape(meta), "#123 ・ %s ・ %s〜%s ・ 会話 2" % (
             TASK, local_day("2026-11-20"), day(t(60 * 24 * 21))))
         # 渡した home の下は ~ で出す
         tilde = frag_task_card(d, resume_default="vscode", home=HOME)
-        self.assertIn(" ・ ~/tasks/2026-11-20-a ・ ", tilde)
+        self.assertIn(" ・ ~/tasks/2026-11-20-a<button", tilde)
         self.assertEqual(m.tags_with("class", "task-card")[0][1]["data-task"], "2026-11-20-a")
+
+    def test_sessions_come_before_documents(self):
+        html = frag_task_card(make_detail(), resume_default="vscode")
+        sessions = html.index('<div class="sec">会話 2</div>')
+        documents = html.index('<div class="sec">資料 ')
+        self.assertLess(sessions, documents)
+        self.assertLess(documents, html.index('class="foot"'))
+
+    def test_card_copies_the_folder_path(self):
+        d = make_detail()
+        html = frag_task_card(d, resume_default="vscode", home=HOME)
+        self.assertSafe(html)
+        meta = re.search(r'<div class="meta">(.*?)</div>', html).group(1)
+        self.assertIn('<button class="more" data-action="copy" data-copy="%s">パスをコピー</button>' % TASK, meta)
+        self.assertIn("~/tasks/2026-11-20-a", meta)
+        self.assertLess(meta.index("~/tasks/2026-11-20-a"), meta.index("パスをコピー"))
 
     def test_card_foot_has_the_trash_button(self):
         html = frag_task_card(make_detail(), resume_default="vscode", home=HOME)

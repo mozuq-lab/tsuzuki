@@ -118,20 +118,21 @@ def _line2(r: TaskRow) -> str:
 def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = None,
                    resume_command: Optional[str] = None) -> str:
     """タスクのカード：題と4つのボタン、段階と待ち、現在地と次の一手、待っていること・
-    決めたこと・チケット・ブランチと PR、資料（3つの束）、会話、注意。data-mtime は task.md の更新時刻を
+    決めたこと・チケット・ブランチと PR、会話、資料（3つの束）、ゴミ箱、注意。data-mtime は task.md の更新時刻を
     そのままの精度で（repr）持ち、段階と待ちの操作がそれを送り返す。resume_command は、既定の再開がコピーの
     ときに「続きから」がコピーする再開のコマンド（サーバーが台帳から作る）。home の下のパスは ~ で出す。"""
     row = d.row
     boxed = [w for w in d.warnings if w == NO_CURRENT]
     notes = [w for w in d.warnings if w != NO_CURRENT]
-    meta = _join([_e(row.ticket or "チケットなし"), _e(_tilde(d.path, home) if home else d.path),
+    meta = _join([_e(row.ticket or "チケットなし"), _e(_tilde(d.path, home) if home else d.path) + _button(
+                      "パスをコピー", "more", ("data-action", "copy"), ("data-copy", d.path)),
                   _e(_period(_date_iso(d.created), row.last_at, days=True)),
                   "会話 %s" % _n(row.n_sessions) if row.n_sessions else ""])
     out = ["<div%s>" % _attrs(("class", "task-card"), ("data-task", row.name), ("data-mtime", repr(d.md_mtime)),
                               ("data-size", d.md_size)),
            '<div class="dh"><div class="head"><h4>%s</h4><div class="meta">%s</div></div><div class="btns">%s</div>'
            '</div>' % (_e(row.title), meta, _card_buttons(d, resume_default, resume_command)),
-           _steps(row), _status_box(d, boxed), _fields(d), _documents(d, home), _sessions(d.sessions)]
+           _steps(row), _status_box(d, boxed), _fields(d), _sessions(d.sessions), _documents(d, home)]
     out.append(_foot(d, home))
     out += ['<div class="notice">%s</div>' % _e(note) for note in notes]
     out.append("</div>")

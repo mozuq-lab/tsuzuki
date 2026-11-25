@@ -270,8 +270,9 @@ def frag_card(d: SessionDetail, *, resume_default: str, hit_turns: Sequence[int]
         out.append('<div class="notice">%s</div>' % NO_RESUME)
     if turns:
         out.append(_hit_section(d.id, turns, index, excerpt, terms))
-    out += [_recap(d), _kv("最初の依頼", d.first_prompt), _kv("最後の依頼", d.last_prompt), _card_tasks(d, task_choices),
-            _card_docs(d), _card_relations(d), '<div class="foot">%s</div>' % _open_conversation(d.id, turn), "</div>"]
+    out += [_recap(d), _kv("最初の依頼", d.first_prompt), _kv("最後の依頼", d.last_prompt),
+            '<div class="go">%s</div>' % _open_conversation(d.id, turn), _card_tasks(d, task_choices),
+            _card_docs(d), _card_relations(d), "</div>"]
     return "".join(out)
 
 
