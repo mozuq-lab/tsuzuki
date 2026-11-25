@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from tsuzuki.taskviews import (list_tasks, open_task_choices, origin_web_base, session_tasks, task_counts,
-                              task_detail, task_lines, ticket_url)
+                              task_detail, task_lines, ticket_links)
 from tests.fixtures import allow_system_tmp, make_ledger
 
 HOME = "/Users/me"
@@ -302,22 +302,28 @@ class TaskViewsTest(unittest.TestCase):
         self.assertEqual(items["p"].n_children, 1)
         self.assertEqual(items["o"].row.kind, "headless")
 
-    def test_ticket_url(self):
-        self.assertEqual(ticket_url("#12", repo=None, template="https://x.example/issues/{n}"),
-                         "https://x.example/issues/12")
-        self.assertEqual(ticket_url("https://github.com/o/r/issues/5", repo=None, template=None),
-                         "https://github.com/o/r/issues/5")
+    def test_ticket_links(self):
+        self.assertEqual(ticket_links("#12", repo=None, template="https://x.example/issues/{n}"),
+                         [("#12", "https://x.example/issues/12")])
+        self.assertEqual(ticket_links("#12, 13、https://x/i/5, Redmine 7", repo=None, template="https://t/{n}"),
+                         [("#12", "https://t/12"), ("#13", "https://t/13"), ("https://x/i/5", "https://x/i/5"),
+                          ("Redmine 7", None)])
+        self.assertEqual(ticket_links("https://github.com/o/r/issues/5", repo=None, template=None),
+                         [("https://github.com/o/r/issues/5", "https://github.com/o/r/issues/5")])
+        self.assertEqual(ticket_links(None, repo=None, template=None), [])
+        self.assertEqual(ticket_links("#1, #2", repo=None, template=None), [("#1", None), ("#2", None)])
         for i, (origin, base) in enumerate((("git@github.com:o/r.git", "https://github.com/o/r"),
                                             ("https://github.com/o/r.git", "https://github.com/o/r"),
                                             ("ssh://git@ghe.example.com/o/r.git", "https://ghe.example.com/o/r"))):
             repo = "%s/repo%d" % (self.tmp, i)
             os.makedirs(repo + "/.git")
             Path(repo, ".git", "config").write_text('[core]\n\tbare = false\n[remote "origin"]\n\turl = %s\n' % origin)
-            self.assertEqual(ticket_url("#12", repo=repo, template=None), base + "/issues/12")
+            self.assertEqual(ticket_links("#12, #13", repo=repo, template=None),
+                             [("#12", base + "/issues/12"), ("#13", base + "/issues/13")])
         bare = self.tmp + "/norepo"
         os.makedirs(bare + "/.git")
         Path(bare, ".git", "config").write_text("[core]\n")
-        self.assertIsNone(ticket_url("#12", repo=bare, template=None))
+        self.assertEqual(ticket_links("#12", repo=bare, template=None), [("#12", None)])
 
     def test_origin_from_worktree(self):
         main = self.tmp + "/main"

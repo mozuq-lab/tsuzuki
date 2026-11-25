@@ -112,7 +112,7 @@ def make_detail(*, stage="実装", stage_from_pr=False, warnings=(), file_path=N
         created="2026-11-20", updated_at="2026-11-21T09:40:00Z",
         sections={"目的": "期限を延ばす", "現在地": "単体テストを足した", "次の一手": "- 結合テストを通す",
                   "待っていること": "なし", "決めたこと": "延長は 8 時間"},
-        after=None, warnings=list(warnings), ticket_url="https://github.com/o/web-app/issues/123",
+        after=None, warnings=list(warnings), ticket_links=[("#123", "https://github.com/o/web-app/issues/123")],
         branch="fix/session-timeout", prs=[], folder_files=files, folder_cut=False,
         shared_docs=[file_item(ROOT + "/shared/auth-overview.md", kind="notes", kind_label="メモ",
                                title="認証の全体像", relation="読んだ", doc_id=13)],
@@ -540,14 +540,14 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
                          ["待っていること", "決めたこと", "チケット", "ブランチ・PR"])
         for part in ('<div class="k">待っていること</div><div class="v none">なし</div>',
                      '<div class="k">決めたこと</div><div class="v"><div class="md"><p>延長は 8 時間</p></div></div>',
-                     '<div class="k">チケット</div><div class="v">#123 <a href="https://github.com/o/web-app/issues/123" '
-                     'rel="noopener noreferrer" target="_blank">チケットを開く</a></div>',
+                     '<div class="k">チケット</div><div class="v"><a href="https://github.com/o/web-app/issues/123" '
+                     'rel="noopener noreferrer" target="_blank">#123</a></div>',
                      '<div class="k">ブランチ・PR</div><div class="v">fix/session-timeout ・ <a href="https://github.com/'
                      'o/web-app/pull/134" rel="noopener noreferrer" target="_blank">PR #134</a></div>'):
             self.assertIn(part, html)
         # 目的は出さない
         self.assertNotIn("期限を延ばす", html)
-        none = frag_task_card(make_detail(row=make_row(ticket=None), ticket_url=None, branch=None,
+        none = frag_task_card(make_detail(row=make_row(ticket=None), ticket_links=[], branch=None,
                                           sections={"待っていること": "経理の回答\n- 締め日"}), resume_default="vscode")
         self.assertIn('<div class="k">チケット</div><div class="v none">チケットなし</div>', none)
         self.assertIn('<div class="k">ブランチ・PR</div><div class="v none">ブランチなし ・ PR なし</div>', none)
@@ -555,15 +555,27 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
                       '</li></ul></div></div>', none)
         self.assertIn('<div class="k">決めたこと</div><div class="v none">なし</div>', none)
 
+    def test_card_with_several_tickets(self):
+        d = make_detail(row=make_row(ticket="#123, #456, Redmine 7"),
+                        ticket_links=[("#123", "https://x.example/issues/123"), ("#456", "https://x.example/issues/456"),
+                                      ("Redmine 7", None)])
+        html = frag_task_card(d, resume_default="vscode")
+        link = '<a href="https://x.example/issues/%s" rel="noopener noreferrer" target="_blank">#%s</a>'
+        self.assertIn('<div class="k">チケット</div><div class="v">%s ・ %s ・ Redmine 7</div>'
+                      % (link % ("123", "123"), link % ("456", "456")), html)
+        self.assertNotIn("チケットを開く", html)
+        evil = frag_task_card(make_detail(ticket_links=[(EVIL, None)]), resume_default="vscode")
+        self.assertSafe(evil)
+
     def test_ticket_links_are_http_only(self):
         for url in ("javascript:alert(1)", "file:///etc/passwd", "vscode://x/y", "data:text/html,x"):
             with self.subTest(url=url):
-                html = frag_task_card(make_detail(row=make_row(ticket=url), ticket_url=url, prs=[url]),
+                html = frag_task_card(make_detail(row=make_row(ticket=url), ticket_links=[(url, url)], prs=[url]),
                                       resume_default="vscode")
                 self.assertSafe(html)
                 self.assertNotIn("href", html)
                 self.assertIn(htmllib.escape(url), html)  # リンクにはせず、文字として出す
-        http = frag_task_card(make_detail(row=make_row(ticket="#9"), ticket_url="http://jira.example/9"),
+        http = frag_task_card(make_detail(row=make_row(ticket="#9"), ticket_links=[("#9", "http://jira.example/9")]),
                               resume_default="vscode")
         self.assertIn('href="http://jira.example/9"', http)
 
@@ -663,6 +675,9 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertIn('<option value="/Users/me/dev/web-app" title="/Users/me/dev/web-app">dev/web-app</option>', html)
         self.assertIn('<button type="submit" class="btn pri">作る</button>', html)
         self.assertIn('<option value="">なし</option></select>', frag_new_task([]))
+        form = self.assertSafe(html)
+        self.assertEqual(form.tags_with("name", "ticket")[0][1]["placeholder"], "#123, #456（任意）")
+        self.assertIn('<div class="note">複数あるときは , で区切ります</div>', html)
 
     # 設定を変える
 
@@ -680,13 +695,15 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertEqual(m.tags_with("name", "ticket")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["placeholder"], "~/dev/app.code-workspace（任意）")
+        self.assertEqual(m.tags_with("name", "ticket")[0][1]["placeholder"], "#123, #456（任意）")
+        self.assertIn('<div class="note">複数あるときは , で区切ります</div>', html)
         self.assertIn('<div class="note">新しく決めたときと変えたときに保存すると、このファイルの folders の先頭に '
                       '{&quot;path&quot;: &quot;.&quot;}（ワークスペースのあるフォルダー）を足します。先頭にすでにあれば何もしません。'
                       '新しい会話は、VS Code のターミナル・Terminal・コピーではワークスペースのあるフォルダーで、'
                       'VS Code のパネルでは最初のフォルダーで始まるので、こうするとどれでもワークスペースのあるフォルダーで始まります。'
                       'ワークスペースのファイルがリポジトリの中にあると、その変更が Git に出ます。'
                       'このワークスペースを VS Code で開いているときは、VS Code が窓を読み込み直し、パネルの会話が途切れることがあります。</div>', html)
-        self.assertEqual(html.count('class="note"'), 1)
+        self.assertEqual(html.count('class="note"'), 2)
         self.assertNotIn("VS Code で開くときの場所", html)
         options = [a for tag, a in m.tags if tag == "option"]
         self.assertEqual([a.get("value") for a in options], ["", EVIL, "/w/x"])
@@ -740,7 +757,7 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         detail = make_detail(
             row=row, path=ROOT + "/" + EVIL_NAME, task_md=ROOT + "/" + EVIL_NAME + "/task.md", created=EVIL,
             updated_at=EVIL, sections={k: EVIL for k in ("現在地", "次の一手", "待っていること", "決めたこと")},
-            after=(EVIL, EVIL), warnings=[EVIL], ticket_url=EVIL, branch=EVIL, prs=[EVIL, "https://x.example/" + EVIL],
+            after=(EVIL, EVIL), warnings=[EVIL], ticket_links=[(EVIL, EVIL), (EVIL, None)], branch=EVIL, prs=[EVIL, "https://x.example/" + EVIL],
             folder_files=[evil_file], shared_docs=[evil_file], other_docs=[evil_file],
             sessions=[session_item(id='x" onclick="alert(1)', title=EVIL, rule=EVIL, label=EVIL, live=True)])
         fragments = {

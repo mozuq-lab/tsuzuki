@@ -48,6 +48,17 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(normalize_ticket("１２３"), "#123")
         self.assertEqual(normalize_ticket("＃１２３"), "#123")
         self.assertEqual(normalize_ticket("　１２３　"), "#123")
+        self.assertEqual(normalize_ticket("Redmine 123"), "Redmine 123")
+
+    def test_normalize_ticket_with_several(self):
+        for raw, want in (("123, 456", "#123, #456"), ("#123、#456", "#123, #456"), ("123 456", "#123, #456"),
+                          ("#123 https://x/issues/9", "#123, https://x/issues/9"), ("１２３，＃４５６", "#123, #456"),
+                          ("#1, #1, 2, 1", "#1, #2"), ("123,, ,456", "#123, #456"),
+                          ("Redmine 123, 456", "Redmine 123, #456"), (",、", None), ("#1,#2", "#1, #2"),
+                          ("https://x/a?b=1,2", "https://x/a?b=1,2"), ("https://x/a?b=1,2, #5", "https://x/a?b=1,2, #5"),
+                          ("https://x/a?b=1,2、5", "https://x/a?b=1,2, #5"), ("٣", "٣")):
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_ticket(raw), want)
 
 
 class _TmpCase(unittest.TestCase):
@@ -234,6 +245,18 @@ class SettingsTest(_TmpCase):
         self.assertEqual(replace_heading(text, "a", "b"), text.replace("# a", "# b"))
         self.assertEqual(replace_heading("# a\n# a\n", "a", "b"), "# b\n# a\n")
         self.assertEqual(replace_heading("# x\n", "a", "b"), "# x\n")
+
+    def test_several_tickets(self):
+        md = self.task_md()
+        self.assertTrue(self.update(md, ticket="123, 456"))
+        text = md.read_text(encoding="utf-8")
+        self.assertIn('ticket: "#123, #456"\n', text)
+        self.assertEqual(parse_task_md(text).ticket, "#123, #456")
+        self.assertFalse(self.update(md, ticket="#123、#456"))  # 同じ並びなら書かない
+        hand = self.task_md(TEMPLATE.replace('ticket: "#123"', 'ticket: "#123、#456"'))
+        before = hand.read_bytes()
+        self.assertFalse(self.update(hand, ticket="#123、#456"))  # 触っていないフォームは書かない
+        self.assertEqual(hand.read_bytes(), before)
 
     def test_ticket_and_repo_and_workspace(self):
         md = self.task_md()

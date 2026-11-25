@@ -172,11 +172,31 @@ def no_waiting(text: Optional[str]) -> bool:
     return text is None or text.strip() in ("", "なし")
 
 
+_TICKET_URL = re.compile(r"(https?://(?:[^\s、，,]|,(?=[^\s、，,]))*)")
+
+
+def ticket_chunks(ticket: Optional[str]) -> List[str]:
+    """チケットの値を , ・ 、 ・ ，で分けた断片（空も含む）。URL の中の、後ろに空白でない字が続く , では分けない。"""
+    chunks = [""]
+    for i, part in enumerate(_TICKET_URL.split(ticket or "")):
+        if i % 2:
+            chunks[-1] += part
+            continue
+        head, *rest = re.split(r"[,、，]", part)
+        chunks[-1] += head
+        chunks += rest
+    return chunks
+
+
+def ticket_pieces(ticket: Optional[str]) -> List[str]:
+    """チケットの値の、空でない断片（前後の空白を除く）。"""
+    return [p.strip() for p in ticket_chunks(ticket) if p.strip()]
+
+
 def ticket_numbers(ticket: Optional[str]) -> List[str]:
     out: List[str] = []
-    for part in (ticket or "").split(","):
-        part = part.strip()
-        m = re.fullmatch(r"#?(\d+)", part) or re.search(r"://.*?/(\d+)/?(?:[?#].*)?$", part)
+    for part in ticket_pieces(ticket):
+        m = re.fullmatch(r"#?([0-9]+)", part) or re.search(r"://.*?/(\d+)/?(?:[?#].*)?$", part)
         if m:
             out.append(m.group(1))
     return out

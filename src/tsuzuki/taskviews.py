@@ -89,7 +89,7 @@ class TaskDetail:
     sections: Dict[str, str]
     after: Optional[Tuple[str, str]]
     warnings: List[str]
-    ticket_url: Optional[str]
+    ticket_links: List[Tuple[str, Optional[str]]]
     branch: Optional[str]
     prs: List[str]
     folder_files: List[TaskFileItem]
@@ -274,19 +274,28 @@ def _task_rows(conn: sqlite3.Connection, live: Dict[str, LiveSession],
 
 # チケットとリポジトリ
 
-def ticket_url(ticket: Optional[str], *, repo: Optional[str], template: Optional[str]) -> Optional[str]:
-    first = (ticket or "").split(",")[0].strip()
-    if not first:
-        return None
-    if "://" in first:
-        return first
-    numbers = T.ticket_numbers(first)
-    if not numbers:
-        return None
-    if template:
-        return template.replace("{n}", numbers[0])
-    base = origin_web_base(repo) if repo else None
-    return "%s/issues/%s" % (base, numbers[0]) if base else None
+def ticket_links(ticket: Optional[str], *, repo: Optional[str], template: Optional[str]) -> List[Tuple[str, Optional[str]]]:
+    """チケットの断片ごとの（表示, リンク先）。URL はそのまま、番号は設定の型か origin から作り、
+    それ以外は文字だけ（リンク先なし）。"""
+    out = []  # type: List[Tuple[str, Optional[str]]]
+    base = None
+    base_known = False
+    for piece in T.ticket_pieces(ticket):
+        m = re.fullmatch(r"#?([0-9]+)", piece)
+        if "://" in piece:
+            out.append((piece, piece))
+        elif m:
+            n = m.group(1)
+            if template:
+                url = template.replace("{n}", n)  # type: Optional[str]
+            else:
+                if not base_known:
+                    base, base_known = (origin_web_base(repo) if repo else None), True
+                url = "%s/issues/%s" % (base, n) if base else None
+            out.append(("#" + n, url))
+        else:
+            out.append((piece, None))
+    return out
 
 
 def _git_config_path(repo: str) -> Optional[str]:
@@ -544,8 +553,8 @@ def task_detail(conn: sqlite3.Connection, name: str, *, live: Dict[str, LiveSess
         row=row, path=task_dir, task_md=task_md, md_mtime=r["md_mtime"], md_size=r["md_size"],
         task_md_doc_id=md_doc["id"] if md_doc else None, created=r["created"],
         updated_at=_iso(updated) if updated is not None else (_iso(r["md_mtime"]) if r["md_mtime"] else None),
-        sections=sections, after=after, warnings=warnings, ticket_url=ticket_url(r["ticket"], repo=repo,
-                                                                               template=ticket_template),
+        sections=sections, after=after, warnings=warnings, ticket_links=ticket_links(r["ticket"], repo=repo,
+                                                                                    template=ticket_template),
         branch=branch, prs=prs, folder_files=folder_files, folder_cut=cut, shared_docs=shared[:DOC_BUNDLE_LIMIT],
         other_docs=other[:DOC_BUNDLE_LIMIT], sessions=_sessions_list(conn, name, live),
         repo=repo, shared_total=len(shared), other_total=len(other))

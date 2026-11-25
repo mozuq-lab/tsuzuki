@@ -315,14 +315,13 @@ def _fields(d: TaskDetail) -> str:
     """待っていること・決めたこと・チケット（http・https のときだけ開くリンク）・ブランチと PR。"""
     waiting = d.sections.get("待っていること")
     decided = (d.sections.get("決めたこと") or "").strip()
-    ticket = d.row.ticket or ""
-    link = _link("チケットを開く", d.ticket_url) if ticket else ""
+    tickets = " ・ ".join((_link(label, url) if url else "") or _e(label) for label, url in d.ticket_links)
     prs = " ".join(_link(_pr_label(url), url) or _e(url) for url in d.prs)
     branch_pr = _join([_e(d.branch or "ブランチなし"), prs or "PR なし"])
     return "".join((
         _field("待っていること", "" if no_waiting(waiting) else _markdown(waiting.strip())),
         _field("決めたこと", _markdown(decided) if decided else ""),
-        _field("チケット", _e(ticket) + (" " + link if link else "") if ticket else "", empty="チケットなし"),
+        _field("チケット", tickets, empty="チケットなし"),
         _field("ブランチ・PR", branch_pr if d.branch or d.prs else "", empty="ブランチなし ・ PR なし")))
 
 
@@ -422,8 +421,9 @@ def frag_new_task(repos: List[Tuple[str, str]]) -> str:
         'placeholder="login-timeout" spellcheck="false" required></label>'
         '<div class="note">フォルダー名は「今日の日付-短い名前」になります。英小文字・数字・ハイフンがおすすめです'
         '（空白はハイフンにします）</div>'
-        '<label class="kv"><span class="k">チケット</span><input name="ticket" maxlength="200" '
-        'placeholder="#123（任意）"></label>'
+        '<label class="kv"><span class="k">チケット</span><input name="ticket" maxlength="500" '
+        'placeholder="#123, #456（任意）"></label>'
+        '<div class="note">複数あるときは , で区切ります</div>'
         '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
         '<div class="btns"><button type="submit" class="btn pri">作る</button></div>'
         '</form>' % "".join(options))
@@ -449,6 +449,7 @@ def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple
         '<div class="dh"><div class="head"><h4>設定を変える</h4></div></div>'
         '<label class="kv"><span class="k">題</span><input%s></label>'
         '<label class="kv"><span class="k">チケット</span><input%s></label>'
+        '<div class="note">複数あるときは , で区切ります</div>'
         '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
         '<label class="kv"><span class="k">ワークスペース</span><input%s></label>'
         '<div class="note">%s</div>'
@@ -458,7 +459,8 @@ def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple
             _attrs(("id", "task-settings"), ("class", "new-task task-settings"), ("data-task", name),
                    ("data-mtime", repr(mtime)), ("data-size", size)),
             _attrs(("name", "title"), ("value", title), ("maxlength", 200), ("required", "")),
-            _attrs(("name", "ticket"), ("value", tf.ticket or ""), ("maxlength", 200), ("placeholder", "#123（任意）")),
+            _attrs(("name", "ticket"), ("value", tf.ticket or ""), ("maxlength", 500),
+                   ("placeholder", "#123, #456（任意）")),
             "".join(options),
             _attrs(("name", "workspace"), ("value", tf.workspace or ""), ("maxlength", 1000), ("spellcheck", "false"),
                    ("placeholder", "~/dev/app.code-workspace（任意）")),

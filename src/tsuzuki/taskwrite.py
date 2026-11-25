@@ -17,7 +17,7 @@ from typing import Callable, Dict, List, Optional
 
 from tsuzuki.pathguard import is_inside
 from tsuzuki.privacy import os_error_text
-from tsuzuki.tasks import _FENCE, _H1, _H2, STAGES, TASK_MD, is_task_dir_name, parse_task_md, task_title
+from tsuzuki.tasks import _FENCE, _H1, _H2, STAGES, TASK_MD, is_task_dir_name, parse_task_md, task_title, ticket_chunks
 from tsuzuki.workspace import WorkspaceError, first_folder
 
 CHANGED = "task.md が変わりました。読み直してください"
@@ -54,12 +54,25 @@ def normalize_short_name(name: str) -> str:
     return name
 
 
+_TICKET_WORD = re.compile(r"#?[0-9]+|https?://\S+")
+
+
 def normalize_ticket(ticket: Optional[str]) -> Optional[str]:
-    """チケットの値。全角の数字や ＃ は半角にそろえ（NFKC）、数字だけなら #番号 にする。"""
-    ticket = " ".join(unicodedata.normalize("NFKC", ticket or "").split())
-    if not ticket:
-        return None
-    return "#" + ticket if re.fullmatch(r"[0-9]+", ticket) else ticket
+    """チケットの値。全角の数字や ＃ は半角にそろえ（NFKC）、, ・ 、 ・ ，で分け、番号と URL だけの断片は空白でも
+    分け、数字だけの番号は #番号 にして、重なりを除き、", " でつなぐ（「Redmine 123」のような断片は1つのまま）。"""
+    pieces = []  # type: List[str]
+    for chunk in ticket_chunks(unicodedata.normalize("NFKC", ticket or "")):
+        words = chunk.split()
+        if words and all(_TICKET_WORD.fullmatch(w) for w in words):
+            pieces += words
+        elif words:
+            pieces.append(" ".join(words))
+    out = []  # type: List[str]
+    for piece in pieces:
+        piece = "#" + piece if re.fullmatch(r"[0-9]+", piece) else piece
+        if piece not in out:
+            out.append(piece)
+    return ", ".join(out) or None
 
 
 def _quoteless(ticket: Optional[str]) -> Optional[str]:

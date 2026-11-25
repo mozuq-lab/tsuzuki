@@ -4,7 +4,7 @@ import unittest
 
 from tsuzuki.tasks import (
     created_from_name, discover_tasks, is_task_dir_name, list_task_files, no_waiting,
-    parse_task_md, ref_paths, stage_label, task_doc_kind, task_title, ticket_numbers)
+    parse_task_md, ref_paths, stage_label, task_doc_kind, task_title, ticket_numbers, ticket_pieces)
 
 SAMPLE = (
     "---\n"
@@ -109,6 +109,9 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(ticket_numbers("123, #124"), ["123", "124"])
         self.assertEqual(ticket_numbers("https://github.com/o/r/issues/77"), ["77"])
         self.assertEqual(ticket_numbers(None), [])
+        self.assertEqual(ticket_numbers("#1、#2"), ["1", "2"])
+        self.assertEqual(ticket_numbers("#1，#2"), ["1", "2"])
+        self.assertEqual(ticket_pieces("https://x/a?b=1,2, #5,#6"), ["https://x/a?b=1,2", "#5", "#6"])
 
     def test_ref_paths(self):
         section = ("- [全体像](../shared/auth.md)\n- @/Users/me/dev/web-app/docs/api.md\n"

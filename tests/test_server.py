@@ -1621,6 +1621,17 @@ class TaskServerTest(ServerCase):
         self.assertEqual(parse_task_md(text).workspace, ws)
         card = self.frag("/frag/task/2026-11-20-a")
         self.assertIn("<h4>新しい題</h4>", card)
+        # チケットが複数でも、書き方をそろえ、一覧には番号を並べる
+        stamp = self.card_stamp(card)
+        multi = self.action("/api/task-settings", dict(body, ticket="123、456", mtime=stamp[0], size=stamp[1]))
+        self.assertTrue(multi.json()["ok"])
+        self.assertIn('ticket: "#123, #456"\n', self.text())
+        self.assertIn("#123 #456", self.frag("/frag/tasks"))
+        card = self.frag("/frag/task/2026-11-20-a")
+        self.assertEqual(card.count("チケットを開く"), 0)
+        stamp = self.card_stamp(card)  # 元の値に戻す
+        self.assertTrue(self.action("/api/task-settings", dict(body, mtime=stamp[0], size=stamp[1])).json()["ok"])
+        card = self.frag("/frag/task/2026-11-20-a")
         # 同じ値で、取り直した時刻で送れば、書かない
         stamp = self.card_stamp(card)
         before = os.stat(self.task_md).st_mtime_ns
@@ -1755,6 +1766,8 @@ class TaskServerTest(ServerCase):
         self.assertTrue(made["task"].endswith("-with-repo"))
         self.assertIn("repo: %s\n" % self.proj, self.text(made["task_md"]))
         self.assertIn('ticket: "#45"\n', self.text(made["task_md"]))
+        many = self.action("/api/task-new", dict(body, short_name="many", ticket="123, 456")).json()
+        self.assertIn('ticket: "#123, #456"\n', self.text(many["task_md"]))
         # 任意の欄は省いてもよい
         self.assertTrue(self.action("/api/task-new", {"title": "省略", "short_name": "short"}).json()["ok"])
         for changes, message in (({"short_name": "../x"}, "タスクの短い名前に使えない文字があります"),
