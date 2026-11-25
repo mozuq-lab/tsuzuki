@@ -214,8 +214,37 @@ class UiAssetsTest(unittest.TestCase):
             self.assertIn(var + ":", root.group(1))
         for cls in FRAGMENT_CLASSES:
             self.assertRegex(css, r"\.%s(?![\w-])" % re.escape(cls), "app.css に .%s の見た目がない" % cls)
+        for selector in ("#back", "#forward"):
+            self.assertRegex(css, r"%s[,\s{:]" % re.escape(selector), "app.css に %s の見た目がない" % selector)
         self.assertNotIn("@import", css)  # 外から読まない
         self.assertNotRegex(css, r"url\(\s*['\"]?(https?:)?//")
+
+    def test_back_and_forward_buttons(self):
+        html = _asset("index.html")
+        head = re.search(r'<header id="top">\s*(<button[^>]*>.*?</button>)\s*(<button[^>]*>.*?</button>)', html, re.S)
+        self.assertIsNotNone(head, "header#top の最初の2つが button ではない")
+        for button, ident in zip(head.groups(), ("back", "forward")):
+            self.assertIn('id="%s"' % ident, button)
+            self.assertIn('type="button"', button)
+            self.assertRegex(button, r"\bdisabled\b")
+        js = _asset("app.js")
+        for part in ("history.back()", "history.forward()", "{ n:"):
+            self.assertIn(part, js)
+        self.assertIn('addEventListener("popstate", fromPopState)', js)
+        self.assertIn("event.state", _function(js, "fromPopState"))
+        self.assertIn("syncHistoryButtons()", _function(js, "fromPopState"))
+        # 新しい項目を積むと先の項目は消えるので、「→」の限りは今の番号になる
+        self.assertIn("furthest = position;", _function(js, "go"))
+        remember = _function(js, "rememberPosition")
+        self.assertRegex(remember, r"\} else \{[^}]*furthest = position;")
+        self.assertIn("furthest = Math.max(furthest, position);", remember.split("} else {")[0])
+        self.assertIn("function syncHistoryButtons()", js)
+        self.assertIn("function rememberPosition(", js)
+
+    def test_clicked_rows_are_kept_in_history(self):
+        js = _asset("app.js")
+        self.assertIn("selectRow(picked, true)", _function(js, "onClick"))
+        self.assertIn("selectRow(rows[next], false)", _function(js, "moveSelection"))
 
     def test_long_paths_do_not_scroll_the_panes_sideways(self):
         # パスのように切れ目のない文字は、どこででも折り返す（どのペインも横には動かない）

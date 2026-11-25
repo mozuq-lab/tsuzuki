@@ -116,6 +116,8 @@ const ui = {
   qdays: byId("opt-qdays"),
   role: byId("opt-role"),
   order: byId("opt-order"),
+  back: byId("back"),
+  forward: byId("forward"),
 };
 
 // 各ペインに入っている断片。url が同じなら取り直さない（取りに行っている途中なら、その結果を待つ）
@@ -126,6 +128,8 @@ const panes = {
 };
 
 let state = readHash();
+let position = 0; // 今の履歴の項目の通し番号（history.state.n）
+let furthest = 0; // この画面で見た一番先の通し番号（これより手前にいるときだけ「→」が押せる）
 let renderCount = 0; // 新しい描画が始まったら、古い描画の続きはしない
 let searchTimer = 0;
 let toastTimer = 0;
@@ -202,11 +206,47 @@ function go(changes, push) {
   const next = normalize(Object.assign({}, state, changes));
   const url = toHash(next);
   if (url !== toHash(state)) {
-    if (push) history.pushState(null, "", url);
-    else history.replaceState(null, "", url);
+    if (push) {
+      position += 1;
+      furthest = position; // 先にあった項目は、積むと消える
+      history.pushState({ n: position }, "", url);
+    } else {
+      history.replaceState({ n: position }, "", url);
+    }
+    syncHistoryButtons();
   }
   state = next;
   render();
+}
+
+// 今の項目の通し番号を覚える。番号のない項目（手で # を書き換えたもの）は、1つ積んだものとみなして印を付ける
+function rememberPosition(entry) {
+  if (entry && Number.isInteger(entry.n)) {
+    position = entry.n;
+    furthest = Math.max(furthest, position);
+  } else {
+    position += 1;
+    furthest = position; // 新しい項目を積むと、先にあった項目は消える
+    history.replaceState({ n: position }, "");
+  }
+}
+
+// 「←」は最初の項目では、「→」は一番先の項目では押せない
+function syncHistoryButtons() {
+  ui.back.disabled = position <= 0;
+  ui.forward.disabled = position >= furthest;
+}
+
+function fromPopState(event) {
+  rememberPosition(event.state);
+  syncHistoryButtons();
+  fromHistory();
+}
+
+function fromHashChange() {
+  rememberPosition(history.state);
+  syncHistoryButtons();
+  fromHistory();
 }
 
 // changes で状態が変わるか（go と同じく normalize してから比べる）
@@ -536,7 +576,7 @@ function onClick(event) {
     else if ("status" in picked.dataset) chooseStatus(picked.dataset.status);
     else if ("place" in picked.dataset) choosePlace(picked.dataset.place);
   } else if (ui.list.contains(picked)) {
-    selectRow(picked, false);
+    selectRow(picked, true);
   } else if (ui.detail.contains(picked)) {
     openFromDetail(picked);
   }
@@ -1537,8 +1577,10 @@ const narrowWindow = window.matchMedia("(max-width: 1199.98px)");
 document.addEventListener("click", onClick);
 document.addEventListener("submit", onSubmit);
 document.addEventListener("keydown", onKey);
-window.addEventListener("popstate", fromHistory);
-window.addEventListener("hashchange", fromHistory);
+window.addEventListener("popstate", fromPopState);
+window.addEventListener("hashchange", fromHashChange);
+ui.back.addEventListener("click", () => history.back());
+ui.forward.addEventListener("click", () => history.forward());
 window.addEventListener("message", receiveMermaid);
 document.addEventListener("tsuzuki-theme", redrawMermaid);
 ui.q.addEventListener("input", (event) => {
@@ -1564,6 +1606,9 @@ if (narrowWindow.addEventListener) narrowWindow.addEventListener("change", place
 else narrowWindow.addListener(placeListOptions);
 placeListOptions();
 ui.q.value = state.q;
+if (history.state && Number.isInteger(history.state.n)) position = furthest = history.state.n;
+else history.replaceState({ n: 0 }, "");
+syncHistoryButtons();
 render();
 pollStatus();
 setInterval(pollStatus, POLL_MS);
