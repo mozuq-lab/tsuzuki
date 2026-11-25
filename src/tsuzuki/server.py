@@ -50,6 +50,7 @@ from tsuzuki.taskindex import ROOT_KEY, forget_task, refresh_task, reset_task_in
 from tsuzuki.tasklinks import link_tasks, set_override
 from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, parse_task_md, stage_label, task_title, within
 from tsuzuki.taskwrite import TaskWriteError, copy_into_task, create_task, set_fields, set_waiting, trash_task, update_settings
+from tsuzuki.workspace import WorkspaceError, ensure_self_first
 
 TOKEN_FILE = "token"
 COOKIE = "tsuzuki_key"
@@ -120,6 +121,11 @@ TASK_MADE = "タスクを作りました"
 STAGE_SET = "段階を「%s」にしました"
 WAITING_SET = {True: "待ちにしました", False: "待ちを解きました"}
 SETTINGS_SET = "設定を変えました"
+WORKSPACE_ADDED = SETTINGS_SET + '。ワークスペースの folders の先頭に "." を足しました'
+WORKSPACE_ELSEWHERE = (SETTINGS_SET + '。ワークスペースの folders に "." がありますが、先頭ではありません。'
+                       "パネルの新しい会話をこのフォルダーで始めるには、先頭に移してください")
+WORKSPACE_NOT_ADDED = (SETTINGS_SET + '。ただし、ワークスペースに "." を足せませんでした（%s）。'
+                       '手で folders の先頭に {"path": "."} を足してください')
 NO_SETTINGS_CHANGE = "変わった所はありません"
 TICKET_URL_SET = "チケットのリンク先を変えました"
 TASKS_ROOT_SET = "タスクの置き場所を変えました。新しい置き場所のタスクを読み込んでいます"
@@ -955,6 +961,14 @@ def _api_task_settings(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     ticket, repo, workspace = _task_text(data, "ticket"), _task_text(data, "repo"), _task_text(data, "workspace")
     mtime, size = _task_stamp(data)
     changed = []  # type: List[bool]
+    saved = []  # type: List[str]  # 書いたあとのワークスペース（新しい値か変えた値のときだけ。空なら入れない）
+
+    def workspace_of(md: Path) -> Optional[str]:
+        try:
+            with open(str(md), "rb") as f:
+                return parse_task_md(f.read().decode("utf-8")).workspace
+        except (OSError, UnicodeDecodeError):
+            return None
 
     def write(md: Path, root: Path) -> None:
         wanted = " ".join(repo.split())
@@ -967,12 +981,23 @@ def _api_task_settings(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
             with app.connect() as conn:
                 if wanted != current and wanted not in {path for path, _ in _repo_choices(app, conn)}:
                     raise TaskWriteError(NOT_A_PLACE)
+        before = workspace_of(md)
         changed.append(update_settings(md, root, title=title, ticket=ticket, repo=repo, workspace=workspace,
                                        home=str(app.home), expect_mtime=mtime, expect_size=size,
                                        claude_dir=app.claude_dir))
+        after = workspace_of(md)
+        if changed[-1] and after and after != before:
+            saved.append(after)
     answer = _write_task_md(app, task, write, SETTINGS_SET)
     if answer["ok"] and not any(changed):
         answer["message"] = NO_SETTINGS_CHANGE
+    elif answer["ok"] and saved:  # task.md に書けたあとで、ワークスペースのファイルに "." を足す
+        try:
+            result = ensure_self_first(saved[0], claude_dir=app.claude_dir)
+        except WorkspaceError as e:
+            answer["message"] = WORKSPACE_NOT_ADDED % e
+        else:
+            answer["message"] = {"added": WORKSPACE_ADDED, "elsewhere": WORKSPACE_ELSEWHERE}.get(result, SETTINGS_SET)
     return answer
 
 

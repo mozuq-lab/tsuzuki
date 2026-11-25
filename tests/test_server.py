@@ -26,6 +26,11 @@ from tsuzuki.tasks import parse_task_md
 from tsuzuki.taskwrite import CHANGED, TaskWriteError
 from tests.fixtures import FakeClaude, assistant, make_git_repo, make_ledger, sid, t, tool_result, user, write_file
 
+def read_file(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
 S1, S8, S9 = sid(1), sid(8), sid(9)  # 対話、親が分からないヘッドレス、S1 の子のヘッドレス
 GONE = sid(77)  # 記録がなく、入力履歴だけに残るセッション
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-src 'self'; "
@@ -1377,7 +1382,10 @@ class TaskServerTest(ServerCase):
         body = {"task": "2026-11-20-a", "title": "新しい題", "ticket": "#123", "repo": self.proj, "workspace": ws,
                 "mtime": stamp[0], "size": stamp[1]}
         r = self.action("/api/task-settings", body)
-        self.assertEqual(r.json(), {"ok": True, "needs_confirm": False, "message": "設定を変えました"})
+        self.assertEqual(r.json(), {"ok": True, "needs_confirm": False, "message":
+                                    '設定を変えました。ワークスペースの folders の先頭に "." を足しました'})
+        folders = json.loads(read_file(ws))["folders"]
+        self.assertEqual(folders, [{"path": "."}, {"path": self.proj}])
         text = self.text()
         self.assertIn("title: 新しい題\n", text)
         self.assertIn("# 新しい題\n", text)
@@ -1387,15 +1395,61 @@ class TaskServerTest(ServerCase):
         # 同じ値で、取り直した時刻で送れば、書かない
         stamp = self.card_stamp(card)
         before = os.stat(self.task_md).st_mtime_ns
+        ws_before = (read_file(ws), os.stat(ws).st_mtime_ns)
         same = self.action("/api/task-settings", dict(body, mtime=stamp[0], size=stamp[1]))
         self.assertEqual(same.json(), {"ok": True, "needs_confirm": False, "message": "変わった所はありません"})
         self.assertEqual(os.stat(self.task_md).st_mtime_ns, before)
+        self.assertEqual((read_file(ws), os.stat(ws).st_mtime_ns), ws_before)
         # 古いフォームの時刻では書かない
         stale = self.action("/api/task-settings", dict(body, title="また別", mtime=0.5, size=1))
         self.assertEqual(stale.json(), {"ok": False, "needs_confirm": False, "message": CHANGED})
         self.assertIn('<form id="task-settings"', self.frag("/frag/task-settings/" + quote("2026-11-22-ログイン")))
         for bad in ("nope", "shared", "..%2Fx"):
             self.assertEqual(self.get("/frag/task-settings/" + bad, cookie=True).status, 404)
+
+    def settings_body(self, ws):
+        card = self.frag("/frag/task/2026-11-20-a")
+        stamp = self.card_stamp(card)
+        return {"task": "2026-11-20-a", "title": "ログインのセッション切れを延ばす", "ticket": "#123",
+                "repo": self.proj, "workspace": ws, "mtime": stamp[0], "size": stamp[1]}
+
+    def test_task_settings_workspace_variants(self):
+        ws_dir = os.path.join(self.root, "wsv")
+        os.makedirs(ws_dir)
+        cases = (
+            ("present.code-workspace", {"folders": [{"path": "."}, {"path": self.proj}]}, "設定を変えました"),
+            ("elsewhere.code-workspace", {"folders": [{"path": self.proj}, {"path": "."}]},
+             '設定を変えました。ワークスペースの folders に "." がありますが、先頭ではありません。'
+             "パネルの新しい会話をこのフォルダーで始めるには、先頭に移してください"),
+        )
+        for name, content, message in cases:
+            ws = os.path.join(ws_dir, name)
+            write_file(ws, json.dumps(content))
+            before = (read_file(ws), os.stat(ws).st_mtime_ns)
+            r = self.action("/api/task-settings", self.settings_body(ws))
+            self.assertEqual(r.json(), {"ok": True, "needs_confirm": False, "message": message}, name)
+            self.assertIn("workspace: %s\n" % ws, self.text())
+            self.assertEqual((read_file(ws), os.stat(ws).st_mtime_ns), before, name)
+        # 古い時刻なら、新しいワークスペースでもファイルを触らない
+        stale_ws = os.path.join(ws_dir, "stale.code-workspace")
+        write_file(stale_ws, json.dumps({"folders": [{"path": self.proj}]}))
+        os.utime(stale_ws, (1000000, 1000000))
+        stale = self.action("/api/task-settings", dict(self.settings_body(stale_ws), mtime=0.5, size=1))
+        self.assertFalse(stale.json()["ok"])
+        self.assertEqual(json.loads(read_file(stale_ws)), {"folders": [{"path": self.proj}]})
+        self.assertEqual(os.stat(stale_ws).st_mtime, 1000000)
+        # 足せないときも task.md は書けている
+        bad = os.path.join(ws_dir, "bad.code-workspace")
+        write_file(bad, json.dumps({"folders": [{"path": self.proj}]}))
+        real = os.path.join(ws_dir, "real.code-workspace")
+        os.rename(bad, real)
+        os.symlink(real, bad)
+        r = self.action("/api/task-settings", self.settings_body(bad)).json()
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["message"], '設定を変えました。ただし、ワークスペースに "." を足せませんでした'
+                         '（シンボリックリンクのワークスペースには足せません）。手で folders の先頭に {"path": "."} を足してください')
+        self.assertIn("workspace: %s\n" % bad, self.text())
+        self.assertEqual(json.loads(read_file(real))["folders"], [{"path": self.proj}])
 
     def test_task_settings_repo_must_be_a_place(self):
         stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
