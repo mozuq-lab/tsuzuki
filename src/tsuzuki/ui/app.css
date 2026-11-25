@@ -568,6 +568,7 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 .arrow { font-size: 10px; color: var(--text-tertiary); }
 .steps .btn { margin-left: .6rem; }
 .note { font-size: 11px; color: var(--text-tertiary); }
+#left > .note { padding: .2rem .9rem; }
 /* 待ちにする・待ちを解くときの、待っていることの入力欄（初めは hidden） */
 .waiting-form { margin: .45rem 0 .2rem; }
 .waiting-form[hidden] { display: none; }

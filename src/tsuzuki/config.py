@@ -6,6 +6,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from tsuzuki.privacy import os_error_text
+
 DEFAULT_DOC_EXTENSIONS = [
     ".md", ".markdown", ".mdx", ".txt", ".html", ".htm",
     ".csv", ".pdf", ".docx", ".pptx", ".xlsx",
@@ -200,6 +202,10 @@ def normalize_tasks_root_input(text: str, *, home: str, claude_dir: Path) -> str
     root = resolve_tasks_root(Config(tasks_root=text), home=home, claude_dir=claude_dir)
     if not root.is_dir():
         raise ConfigError("フォルダーがありません。先に作ってから指定してください: %s" % root)
+    try:
+        os.listdir(str(root))  # is_dir は stat だけ。macOS の保護で一覧できない場所は、ここで断る
+    except OSError as e:
+        raise ConfigError("このフォルダーの中を読めません（%s）: %s" % (os_error_text(e), root))
     return text
 
 

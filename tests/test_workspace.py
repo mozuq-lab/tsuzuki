@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tsuzuki.privacy import PRIVACY_HINT
+from tsuzuki.privacy import PRIVACY_HINT, WRITE_HINT
 from tsuzuki.workspace import WorkspaceError, ensure_self_first, first_folder, strip_jsonc
 
 
@@ -174,7 +174,7 @@ class EnsureSelfFirstTest(unittest.TestCase):
             with self.assertRaises(WorkspaceError) as cm:
                 ensure_self_first(path)
         self.assertTrue(str(cm.exception).startswith("書けません（"), str(cm.exception))
-        self.assertIn(PRIVACY_HINT, str(cm.exception))
+        self.assertIn(WRITE_HINT, str(cm.exception))
         os.chmod(str(self.dir), 0o555)
         self.addCleanup(os.chmod, str(self.dir), 0o755)
         with self.assertRaises(WorkspaceError) as cm:

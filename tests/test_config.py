@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import io
 import json
 import os
@@ -6,8 +7,10 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tsuzuki import cli
+from tsuzuki.privacy import PRIVACY_HINT
 from tsuzuki.config import (
     Config,
     ConfigError,
@@ -57,6 +60,17 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(ConfigError) as cm:
                 norm("~/missing")
             self.assertIn("フォルダーがありません。先に作ってから指定してください", str(cm.exception))
+
+    def test_normalize_tasks_root_input_names_the_privacy_setting_when_listing_is_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.realpath(d)
+            claude = Path(home) / ".claude"
+            claude.mkdir()
+            (Path(home) / "x").mkdir()
+            with mock.patch("os.listdir", side_effect=PermissionError(errno.EPERM, "Operation not permitted")):
+                with self.assertRaises(ConfigError) as cm:
+                    normalize_tasks_root_input("~/x", home=home, claude_dir=claude)
+            self.assertIn(PRIVACY_HINT, str(cm.exception))
 
     def test_write_tasks_root_keeps_other_settings(self):
         with tempfile.TemporaryDirectory() as d:

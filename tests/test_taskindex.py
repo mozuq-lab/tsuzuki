@@ -1,3 +1,4 @@
+import errno
 import os
 import shutil
 import tempfile
@@ -7,6 +8,7 @@ from unittest import mock
 
 from tsuzuki.config import Config
 from tsuzuki.indexer import _Places, update
+from tsuzuki.privacy import PRIVACY_HINT
 from tsuzuki.store import get_meta
 from tsuzuki.taskindex import refresh_task, sync_tasks
 from tests.fixtures import FakeClaude, allow_system_tmp, count, make_ledger, write_file
@@ -169,6 +171,12 @@ class TaskIndexTest(unittest.TestCase):
         self.assertEqual(count(self.conn, "task_overrides"), 1)
         self.assertEqual(count(self.conn, "documents"), before)
         self.assertIsNone(self.sync().error)
+
+    def test_failed_listing_by_the_macos_protection_names_the_setting(self):
+        self.sync()
+        with mock.patch("tsuzuki.tasks.os.scandir", side_effect=PermissionError(errno.EPERM, "Operation not permitted")):
+            sync = self.sync()
+        self.assertIn(PRIVACY_HINT, sync.error)
 
     def test_failed_listing_is_reported_by_update(self):
         fake = FakeClaude(Path(self.d) / "claude")

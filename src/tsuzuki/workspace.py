@@ -227,7 +227,7 @@ def ensure_self_first(path: str, *, claude_dir: Optional[Path] = None) -> str:
         os.replace(tmp, path)
         tmp = None
     except OSError as e:
-        raise WorkspaceError("書けません（%s）" % os_error_text(e))
+        raise WorkspaceError("書けません（%s）" % os_error_text(e, writing=True))
     finally:
         if tmp is not None:
             try:

@@ -35,8 +35,8 @@ from typing import Any, BinaryIO, Callable, Dict, FrozenSet, Iterator, List, Opt
 from urllib.parse import parse_qs, unquote
 
 from tsuzuki import taskviews, ui_render, ui_tasks, views
-from tsuzuki.config import (Config, ConfigError, normalize_tasks_root_input, normalize_ticket_url, resolve_tasks_root,
-                            write_tasks_root, write_ticket_url)
+from tsuzuki.config import (Config, ConfigError, normalize_tasks_root_input, normalize_ticket_url, read_config,
+                            resolve_tasks_root, write_tasks_root, write_ticket_url)
 from tsuzuki.doctor import CHECK_ALLOW, CHECK_CLAUDE_MD, task_checks
 from tsuzuki.indexer import UpdateReport, update, update_lock
 from tsuzuki.resume import ActionOutcome, is_session_id, open_document, open_place, resume, start_conversation
@@ -222,6 +222,7 @@ class App:
     def run_update(self) -> Optional[UpdateReport]:
         """更新を1回行う（このプロセスでは同時に1つだけ）。失敗は例外にせず、状態（last_error）に残す。"""
         with self._updating:
+            self._follow_config()
             with self.lock:
                 self.running, self.progress = True, (0, 0)
             report, error = None, None  # type: Optional[UpdateReport], Optional[str]
@@ -229,7 +230,7 @@ class App:
                 with self.connect() as conn:
                     # タスクの置き場所はいつも渡す（渡さない更新は、場所の表示名「タスク」「共通の資料」を戻してしまう）
                     report = update(conn, self.cfg, claude_dir=self.claude_dir, ledger_dir=self.ledger_dir,
-                                    home=self.home, progress=self._progress, tasks_root=self.tasks_root)
+                                    home=self.home, progress=self._progress, tasks_root=self._tasks_root())
             except Exception as e:  # 更新の失敗でサーバーを止めない
                 error = UPDATE_FAILED % e
             with self.lock:
@@ -238,6 +239,24 @@ class App:
                     self.last_report = report
             self.forget_searches()
             return report
+
+    def _tasks_root(self) -> Optional[Path]:
+        with self.lock:
+            return self.tasks_root
+
+    def _follow_config(self) -> None:
+        """config.json のタスクの置き場所が今と違えば（同じ台帳の別の Tsuzuki が画面で切り替えた、手で直した）、
+        それに合わせる。読めない・解けない間は今のままにする。呼ぶのは _updating の中。"""
+        try:
+            text = read_config(self.ledger_dir).tasks_root
+            if text == self.cfg.tasks_root:
+                return
+            new = resolve_tasks_root(Config(tasks_root=text), home=self.home, claude_dir=self.claude_dir)
+        except (ConfigError, OSError):
+            return
+        with self.lock:
+            self.cfg.tasks_root, self.tasks_root = text, new
+        self.forget_searches()
 
     def forget_searches(self) -> None:
         """台帳が変わったので、覚えた検索の結果を捨てる（変わる前に始めた検索の結果も、この後は覚えない）。"""
@@ -915,12 +934,12 @@ def _api_reindex(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 def _api_task_new(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     title, short_name = _task_text(data, "title"), _task_text(data, "short_name")
     ticket, repo = _task_text(data, "ticket", ""), _task_text(data, "repo", "")
-    root = app.tasks_root
-    if root is None:
-        return _task_failed(NO_TASKS_ROOT)
-    if not title.strip():
-        return _task_failed(NO_TITLE)
     with update_lock(app.ledger_dir), app.connect() as conn:
+        root = app.tasks_root  # 更新の鍵を取ってから読む（切り替えの途中の置き場所を使わない）
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
+        if not title.strip():
+            return _task_failed(NO_TITLE)
         if repo and repo not in {path for path, _ in _repo_choices(app, conn)}:
             return _task_failed(NOT_A_PLACE)
         try:
@@ -1026,7 +1045,8 @@ def _api_tasks_root(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
         new = resolve_tasks_root(Config(tasks_root=text), home=app.home, claude_dir=app.claude_dir)
     except ConfigError as e:
         return _task_failed(str(e))
-    with update_lock(app.ledger_dir), app.lock:  # 更新が、切り替えの途中の置き場所を読まないように
+    # 更新（_updating）が走り終わるのを待ってから鍵を取る（run_update と同じ順）。途中の置き場所を誰も読まない
+    with app._updating, update_lock(app.ledger_dir), app.lock:
         if app.tasks_root is not None and os.path.normpath(str(app.tasks_root)) == os.path.normpath(str(new)):
             return _task_done(NO_SETTINGS_CHANGE)
         with app.connect() as conn:
@@ -1052,12 +1072,12 @@ def _api_tasks_root(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """利用者がセッションをタスクに足す（add）・タスクから外す（remove）。記録は作り直しでも消えない（tasklinks）。"""
     task, session_id, action = _task_text(data, "task"), _task_text(data, "session_id"), _task_text(data, "action")
-    root = app.tasks_root
-    if root is None:
-        return _task_failed(NO_TASKS_ROOT)
-    if action not in LINK_SET:
-        return _task_failed(BAD_LINK_ACTION)
     with update_lock(app.ledger_dir), app.connect() as conn:
+        root = app.tasks_root
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
+        if action not in LINK_SET:
+            return _task_failed(BAD_LINK_ACTION)
         if _task_folder(conn, task) is None:
             return _task_failed(UNKNOWN_TASK)
         if conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone() is None:
@@ -1070,10 +1090,10 @@ def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 def _api_task_trash(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """タスクのフォルダーをゴミ箱へ動かし、台帳から外す。動かせなかったときは台帳をそのままにする。"""
     task = _task_text(data, "task")
-    root = app.tasks_root
-    if root is None:
-        return _task_failed(NO_TASKS_ROOT)
     with update_lock(app.ledger_dir), app.connect() as conn:
+        root = app.tasks_root
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
         folder = _task_folder(conn, task)
         if folder is None:
             return _task_failed(UNKNOWN_TASK)
@@ -1089,10 +1109,10 @@ def _api_task_trash(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 def _api_task_copy_doc(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """台帳にある資料を、タスクのフォルダーへコピーする（元は動かさない）。コピーしたら、タスクを読み直す。"""
     task, doc_id = _task_text(data, "task"), _id_field(data, "doc_id")
-    root = app.tasks_root
-    if root is None:
-        return _task_failed(NO_TASKS_ROOT)
     with update_lock(app.ledger_dir), app.connect() as conn:
+        root = app.tasks_root
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
         folder = _task_folder(conn, task)
         if folder is None:
             return _task_failed(UNKNOWN_TASK)
@@ -1130,10 +1150,10 @@ def _write_task_md(app: App, task: str, write: Callable[[Path, Path], None], don
     """台帳の行のフォルダーの task.md に write(task.md, 置き場所) で書く。write はカードを出したときの更新時刻と
     大きさ（mtime・size）と違えば書かない（taskwrite.CHANGED）。書けなかったときもタスクを読み直す（画面が
     読み直せば、今の時刻で送れる）。"""
-    root = app.tasks_root
-    if root is None:
-        return _task_failed(NO_TASKS_ROOT)
     with update_lock(app.ledger_dir), app.connect() as conn:
+        root = app.tasks_root
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
         folder = _task_folder(conn, task)
         if folder is None:
             return _task_failed(UNKNOWN_TASK)

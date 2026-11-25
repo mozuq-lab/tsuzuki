@@ -34,11 +34,13 @@ _LINK_SCHEMES = ("http://", "https://")
 
 
 # ワークスペースの入力欄の注意書き（保存すると、Tsuzuki がワークスペースの folders の先頭に "." を足す）
-WORKSPACE_NOTE = ("保存すると、このファイルの folders の先頭に {\"path\": \".\"}（ワークスペースのあるフォルダー）を足します。"
-                  "VS Code のパネルの新しい会話は最初のフォルダーで始まるため、こうするとワークスペースのあるフォルダーで"
-                  "始まります。先頭にすでにあれば何もしません。ワークスペースのファイルがリポジトリの中にあると、"
-                  "その変更が Git に出ます。このワークスペースを VS Code で開いているときは、VS Code が窓を読み込み直し、"
-                  "パネルの会話が途切れることがあります。")
+WORKSPACE_NOTE = (
+    '新しく決めたときと変えたときに保存すると、このファイルの folders の先頭に {"path": "."}（ワークスペースのある'
+    'フォルダー）を足します。先頭にすでにあれば何もしません。新しい会話は、VS Code のターミナル・Terminal・コピーでは'
+    'ワークスペースのあるフォルダーで、VS Code のパネルでは最初のフォルダーで始まるので、こうするとどれでも'
+    'ワークスペースのあるフォルダーで始まります。ワークスペースのファイルがリポジトリの中にあると、その変更が Git に出ます。'
+    'このワークスペースを VS Code で開いているときは、VS Code が窓を読み込み直し、パネルの会話が途切れることがあります。')
+
 
 # 左：状況・場所・共通の資料
 
@@ -400,7 +402,6 @@ def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple
         '<label class="kv"><span class="k">チケット</span><input%s></label>'
         '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
         '<label class="kv"><span class="k">ワークスペース</span><input%s></label>'
-        '<div class="note">ワークスペースは .code-workspace のパスです。VS Code で開くときの場所になります</div>'
         '<div class="note">%s</div>'
         '<div class="btns"><button type="submit" class="btn pri">保存</button>'
         '<button type="button" class="btn" data-action="form-cancel">やめる</button></div>'

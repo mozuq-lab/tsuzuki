@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from tsuzuki.config import Config
 from tsuzuki.documents import upsert_document
 from tsuzuki.places import place_id_for
+from tsuzuki.privacy import os_error_text
 from tsuzuki.store import get_meta, set_meta
 from tsuzuki.tasks import (
     SHARED_DIR, TASK_MD, created_from_name, discover_tasks, is_task_dir_name, list_task_files, parse_task_md,
@@ -50,7 +51,7 @@ def sync_tasks(conn: sqlite3.Connection, cfg: Config, *, tasks_root: str, home: 
     except OSError as e:
         # 一覧できなかった回は「タスクがない」とみなさず、何も消さない（手で直した記録も、行も）
         return TaskSync(changed=False, tasks=conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
-                        error=LIST_ERROR % (root, e))
+                        error=LIST_ERROR % (root, os_error_text(e)))
     changed = False
     for task_dir in found:
         try:

@@ -56,7 +56,7 @@ def info_plist(version: str) -> bytes:
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
         "NSAppleEventsUsageDescription": "Terminal で Claude Code のセッションを再開するために使います。",
-        "NSRemovableVolumesUsageDescription": "外付けのディスクにある資料やワークスペースを読むために使います。",
+        "NSRemovableVolumesUsageDescription": "外付けのディスクにある資料・ワークスペース・タスクの置き場所を読み書きするために使います。",
     })
 
 

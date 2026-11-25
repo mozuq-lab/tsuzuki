@@ -19,7 +19,7 @@ from unittest import mock
 from urllib.parse import quote
 
 from tsuzuki import cli, documents, indexer, server, taskwrite
-from tsuzuki.config import Config, read_config
+from tsuzuki.config import Config, read_config, write_tasks_root
 from tsuzuki.indexer import update
 from tsuzuki.server import COOKIE, TICKET_URL_RESET, TOKEN_FILE, make_server, serve
 from tsuzuki.tasks import parse_task_md
@@ -1125,6 +1125,45 @@ class TaskServerTest(ServerCase):
         self.assertIn(new + "/shared/notes-team.md", docs)
         self.assertFalse([d for d in docs if d.startswith(self.tasks_root + "/")], docs)
         self.assertEqual(overrides, 1)  # 手で直した記録は、切り替えでも消さない
+
+    def test_another_server_on_the_ledger_follows_a_switch_and_the_list_stays_stable(self):
+        write_tasks_root(self.ledger, self.tasks_root)
+        self.app.cfg = Config(tasks_root=self.tasks_root)
+        other = server.App(Config(tasks_root=self.tasks_root), ledger_dir=self.ledger, claude_dir=self.fake.dir,
+                           home=self.home, port=1, token="t", runner=self.runner, sleep=lambda s: None,
+                           tasks_root=Path(self.tasks_root))
+        self.app.run_update()
+        other.run_update()
+        new = os.path.join(self.root, "moved")
+        os.makedirs(new)
+        for name in ("2026-11-20-a", "2026-11-22-ログイン", "shared"):
+            os.rename(os.path.join(self.tasks_root, name), os.path.join(new, name))
+        r = self.action("/api/tasks-root", {"path": new}).json()
+        self.assertEqual(r["ok"], True, r)
+        self.assertEqual(other.tasks_root, Path(self.tasks_root))  # 切り替えはまだ知らない
+
+        def state():
+            with self.app.connect() as conn:
+                return (sorted(row[0] for row in conn.execute("SELECT path FROM tasks")),
+                        sorted(row[0] for row in conn.execute("SELECT id FROM documents WHERE path LIKE ?",
+                                                              (new + "/%",))))
+        for _ in range(2):
+            other.run_update()
+            self.assertEqual(other.tasks_root, Path(new))
+            self.assertEqual(other.cfg.tasks_root, new)
+            first = state()
+            self.app.run_update()
+            self.assertEqual(state(), first)  # 交互に更新しても、一覧も資料の ID も変わらない
+        self.assertEqual(first[0], [new + "/2026-11-20-a", new + "/2026-11-22-ログイン"])
+
+    def test_update_keeps_its_root_when_config_json_cannot_be_used(self):
+        (self.ledger / "config.json").write_text("{broken", encoding="utf-8")
+        before = self.app.tasks_root
+        self.app.run_update()
+        self.assertEqual(self.app.tasks_root, before)
+        (self.ledger / "config.json").write_text(json.dumps({"tasks_root": str(self.fake.dir / "x")}), encoding="utf-8")
+        self.app.run_update()
+        self.assertEqual(self.app.tasks_root, before)
 
     def test_vanished_folders_keep_manual_link_records_through_an_update(self):
         with self.app.connect() as conn:

@@ -624,11 +624,14 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertEqual(m.tags_with("name", "ticket")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["placeholder"], "~/dev/app.code-workspace（任意）")
-        self.assertIn('<div class="note">保存すると、このファイルの folders の先頭に {&quot;path&quot;: &quot;.&quot;}'
-                      '（ワークスペースのあるフォルダー）を足します。VS Code のパネルの新しい会話は最初のフォルダーで始まるため、'
-                      'こうするとワークスペースのあるフォルダーで始まります。先頭にすでにあれば何もしません。'
+        self.assertIn('<div class="note">新しく決めたときと変えたときに保存すると、このファイルの folders の先頭に '
+                      '{&quot;path&quot;: &quot;.&quot;}（ワークスペースのあるフォルダー）を足します。先頭にすでにあれば何もしません。'
+                      '新しい会話は、VS Code のターミナル・Terminal・コピーではワークスペースのあるフォルダーで、'
+                      'VS Code のパネルでは最初のフォルダーで始まるので、こうするとどれでもワークスペースのあるフォルダーで始まります。'
                       'ワークスペースのファイルがリポジトリの中にあると、その変更が Git に出ます。'
                       'このワークスペースを VS Code で開いているときは、VS Code が窓を読み込み直し、パネルの会話が途切れることがあります。</div>', html)
+        self.assertEqual(html.count('class="note"'), 1)
+        self.assertNotIn("VS Code で開くときの場所", html)
         options = [a for tag, a in m.tags if tag == "option"]
         self.assertEqual([a.get("value") for a in options], ["", EVIL, "/w/x"])
         self.assertIn("selected", options[1])
