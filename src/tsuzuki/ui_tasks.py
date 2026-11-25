@@ -132,9 +132,20 @@ def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = 
            '<div class="dh"><div class="head"><h4>%s</h4><div class="meta">%s</div></div><div class="btns">%s</div>'
            '</div>' % (_e(row.title), meta, _card_buttons(d, resume_default, resume_command)),
            _steps(row), _status_box(d, boxed), _fields(d), _documents(d, home), _sessions(d.sessions)]
+    out.append(_foot(d, home))
     out += ['<div class="notice">%s</div>' % _e(note) for note in notes]
     out.append("</div>")
     return "".join(out)
+
+
+def _foot(d: TaskDetail, home: Optional[str]) -> str:
+    """カードの一番下：「ゴミ箱に入れる」（押すと確かめてから、フォルダーごとゴミ箱へ動かす）。"""
+    place = _tilde(d.path, home) if home else d.path
+    confirm = "「%s」のフォルダー（%s）を、中のファイルごとゴミ箱に入れます。" % (d.row.title, place)
+    if d.row.live:
+        confirm += "このタスクの会話が実行中です。"
+    return '<div class="foot">%s</div>' % _button("ゴミ箱に入れる", "btn", ("data-action", "task-trash"),
+                                                 ("data-confirm", confirm))
 
 
 def _card_buttons(d: TaskDetail, default: str, command: Optional[str]) -> str:

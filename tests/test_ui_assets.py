@@ -24,7 +24,7 @@ MAKE_DEMO = ROOT / "scripts" / "make_demo.py"
 # 断片の data-action（タスクの操作を含む）。app.js はすべてを受け持つ
 ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans", "open-doc", "open-place", "docs",
            "fold", "read-more", "task-stage", "task-waiting", "copy-picked", "task-unlink", "task-conversation",
-           "new-task", "task-open", "task-link"}
+           "new-task", "task-open", "task-link", "task-trash"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
 HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く
@@ -116,6 +116,11 @@ class UiAssetsTest(unittest.TestCase):
             self.assertIn(part, html)
         self.assertNotIn("<script>", html)          # インラインのスクリプトを書かない
         self.assertNotIn('style="', html)
+
+    def test_trash_asks_first(self):
+        body = _function(_asset("app.js"), "trashTask")
+        for part in ("askToContinue(button.dataset.confirm", "/api/task-trash", "busyWriting()"):
+            self.assertIn(part, body)
 
     def test_script_avoids_dialogs_and_eval(self):
         js = pkgutil.get_data("tsuzuki", "ui/app.js").decode()

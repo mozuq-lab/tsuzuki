@@ -182,6 +182,11 @@ def _drop_vanished(conn, root: str, names: Set[str]) -> bool:
     return bool(gone)
 
 
+def forget_task(conn, name: str, path: str) -> None:
+    """台帳から、タスクの行・会話との結び付き・手で直した記録・そのフォルダーの資料を消す（フォルダーを動かした後）。"""
+    _drop_task(conn, name, path, keep_overrides=False)
+
+
 def _drop_task(conn, name: str, path: Optional[str], *, keep_overrides: bool = False) -> None:
     with conn:
         conn.execute("DELETE FROM tasks WHERE name = ?", (name,))

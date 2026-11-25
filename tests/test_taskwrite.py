@@ -5,10 +5,13 @@ import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from unittest import mock
 
 from tsuzuki.tasks import parse_task_md
-from tsuzuki.taskwrite import (CHANGED, TaskWriteError, create_task, normalize_short_name, normalize_ticket,
-                              render_task_md, set_fields)
+from tsuzuki import taskwrite
+from tsuzuki.taskwrite import (CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
+                              find_trash, normalize_short_name, normalize_ticket, render_task_md, set_fields,
+                              trash_task)
 from tests.fixtures import allow_system_tmp, run_cli
 
 TEMPLATE = (
@@ -157,6 +160,110 @@ class SetFieldsTest(_TmpCase):
         os.chmod(str(md), 0o640)
         set_fields(md, self.root, {"waiting": "true"})
         self.assertEqual(stat.S_IMODE(md.stat().st_mode), 0o640)
+
+
+class TrashTest(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.home = str(self.base / "home")
+        self.folder = self.root / "2026-11-20-a"
+        self.folder.mkdir(parents=True)
+        (self.folder / "task.md").write_text("# a\n", encoding="utf-8")
+        (self.folder / "a.md").write_text("メモ\n", encoding="utf-8")
+        self.trash = self.base / "trash"
+        self.trash.mkdir()
+
+    def trash_it(self, name="2026-11-20-a", **kw):
+        return trash_task(str(self.root / name), self.root, home=self.home, trash_dir=str(self.trash), **kw)
+
+    def test_trash_moves_the_folder(self):
+        moved = self.trash_it()
+        self.assertEqual(moved, str(self.trash / "2026-11-20-a"))
+        self.assertTrue((self.trash / "2026-11-20-a" / "task.md").is_file())
+        self.assertTrue((self.trash / "2026-11-20-a" / "a.md").is_file())
+        self.assertFalse(self.folder.exists())
+
+    def test_trash_renames_on_collision(self):
+        old = self.trash / "2026-11-20-a"
+        old.mkdir()
+        (old / "keep.md").write_text("先にあった物\n", encoding="utf-8")
+        now = datetime(2026, 11, 24, 9, 5, 7)
+        moved = self.trash_it(now=now)
+        self.assertEqual(moved, str(self.trash / "2026-11-20-a 09.05.07"))
+        self.assertTrue((self.trash / "2026-11-20-a 09.05.07" / "a.md").is_file())
+        # 時刻つきの名前もあれば、番号を足す
+        self.folder.mkdir()
+        (self.folder / "task.md").write_text("# a\n", encoding="utf-8")
+        moved = self.trash_it(now=now)
+        self.assertEqual(moved, str(self.trash / "2026-11-20-a 09.05.07 2"))
+        self.assertEqual(os.listdir(str(old)), ["keep.md"])
+        self.assertEqual((old / "keep.md").read_text(encoding="utf-8"), "先にあった物\n")
+
+    def test_trash_refuses_other_folders(self):
+        (self.root / "shared").mkdir()
+        (self.root / ".hidden").mkdir()
+        outside = self.base / "outside"
+        outside.mkdir()
+        (self.root / "2026-11-22-link").symlink_to(outside)
+        nested = self.folder / "inner"
+        nested.mkdir()
+        for target in (self.root, self.root / "shared", self.root / ".hidden", outside, self.root / "2026-11-22-link",
+                       nested):
+            with self.subTest(target=str(target)):
+                with self.assertRaises(TaskWriteError) as caught:
+                    trash_task(str(target), self.root, home=self.home, trash_dir=str(self.trash))
+                self.assertTrue(str(caught.exception).startswith(NOT_A_TASK_FOLDER.split("%")[0]))
+        self.assertEqual(os.listdir(str(self.trash)), [])
+        self.assertTrue(outside.is_dir())
+        self.assertTrue(self.folder.is_dir())
+
+    def test_trash_refuses_the_claude_dir(self):
+        with self.assertRaises(TaskWriteError):
+            self.trash_it(claude_dir=self.base)
+        self.assertTrue(self.folder.is_dir())
+
+    def test_trash_without_a_trash_dir(self):
+        with mock.patch.object(taskwrite, "find_trash", return_value=None):
+            with self.assertRaises(TaskWriteError) as caught:
+                trash_task(str(self.folder), self.root, home=self.home)
+        self.assertEqual(str(caught.exception), NO_TRASH)
+        self.assertTrue(self.folder.is_dir())
+
+    def test_trash_reports_permission_errors(self):
+        with mock.patch("os.rename", side_effect=PermissionError(1, "Operation not permitted")):
+            with self.assertRaises(TaskWriteError) as caught:
+                self.trash_it()
+        self.assertEqual(str(caught.exception), CANNOT_TRASH % "Operation not permitted")
+        self.assertTrue(self.folder.is_dir())
+
+    def test_find_trash_on_the_home_disk(self):
+        home = self.base / "home"
+        (home / ".Trash").mkdir(parents=True)
+        self.assertEqual(find_trash(str(self.folder), str(home)), str(home / ".Trash"))
+
+    def test_find_trash_on_another_disk(self):
+        """path が別のディスクなら、そのディスクの根の .Trashes/<uid>。"""
+        home = self.base / "home"
+        (home / ".Trash").mkdir(parents=True)
+        volume = self.base / "volume"
+        (volume / ".Trashes" / str(os.getuid())).mkdir(parents=True)
+        (volume / "tasks" / "x").mkdir(parents=True)
+        bare = self.base / "bare"
+        (bare / "tasks").mkdir(parents=True)
+        real_dev = os.stat
+
+        def fake_stat(path, *args, **kw):
+            result = real_dev(path, *args, **kw)
+            if str(path).startswith((str(volume), str(bare))):
+                values = list(result)
+                values[2] = 999
+                return os.stat_result(values)
+            return result
+
+        with mock.patch("os.stat", side_effect=fake_stat):
+            self.assertEqual(find_trash(str(volume / "tasks" / "x"), str(home)),
+                             str(volume / ".Trashes" / str(os.getuid())))
+            self.assertIsNone(find_trash(str(bare / "tasks"), str(home)))
 
 
 class CliTest(_TmpCase):

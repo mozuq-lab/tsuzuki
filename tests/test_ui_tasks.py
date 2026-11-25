@@ -280,6 +280,21 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertIn(" ・ ~/tasks/2026-11-20-a ・ ", tilde)
         self.assertEqual(m.tags_with("class", "task-card")[0][1]["data-task"], "2026-11-20-a")
 
+    def test_card_foot_has_the_trash_button(self):
+        html = frag_task_card(make_detail(), resume_default="vscode", home=HOME)
+        self.assertSafe(html)
+        foot = html.rsplit('<div class="foot">', 1)[1]
+        button = re.search(r"<button[^>]*>ゴミ箱に入れる</button>", foot).group(0)
+        self.assertIn('data-action="task-trash"', button)
+        confirm = htmllib.unescape(re.search(r'data-confirm="([^"]*)"', button).group(1))
+        self.assertEqual(confirm, "「ログインのセッション切れを延ばす」のフォルダー（~/tasks/2026-11-20-a）を、"
+                                  "中のファイルごとゴミ箱に入れます。")
+        live = frag_task_card(make_detail(row=make_row(live=True)), resume_default="vscode", home=HOME)
+        live_button = re.search(r"<button[^>]*>ゴミ箱に入れる</button>", live.rsplit('<div class="foot">', 1)[1])
+        self.assertIn(htmllib.escape(confirm + "このタスクの会話が実行中です。"), live_button.group(0))
+        evil = frag_task_card(make_detail(row=make_row(title=EVIL)), resume_default="vscode", home=HOME)
+        self.assertSafe(evil)
+
     def test_mtime_keeps_full_precision(self):
         html = frag_task_card(make_detail(md_mtime=1795243515.1234567), resume_default="vscode")
         mtime = Markup(html).values("data-mtime")[0]

@@ -490,6 +490,7 @@ const ACTIONS = {
   "task-waiting": (button) => writeTask("/api/task-waiting", button, { waiting: button.dataset.waiting === "true" }),
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
+  "task-trash": (button) => trashTask(button),
   "copy-picked": (button) => copyPicked(button),
   "new-task": () => openNewTask(),
   // セッションのカードと検索・資料の行から
@@ -1037,6 +1038,29 @@ async function startConversation(button) {
   if (!answer) return;
   if (answer.ok && how === "copy" && answer.command) copyText(answer.command);
   else toast(answer.message);
+}
+
+// 「ゴミ箱に入れる」：確かめてから、タスクのフォルダーをゴミ箱へ動かす。動かせたら一覧に戻る
+function trashTask(button) {
+  const card = button.closest(".task-card");
+  if (!card) return;
+  if (busyWriting()) return;
+  const task = card.dataset.task;
+  askToContinue(button.dataset.confirm, async () => {
+    if (busyWriting()) return;
+    writing = true;
+    let answer;
+    try {
+      answer = await postWrite("/api/task-trash", { task: task });
+    } finally {
+      writing = false;
+    }
+    if (!answer) return;
+    toast(answer.message);
+    if (!answer.ok) return;
+    panes.list.url = panes.left.url = null; // 同じ URL でも取り直す
+    go({ task: "" }, false);
+  });
 }
 
 // 「＋ 新しいタスク」：右に入力欄を出す（# には残さない。一覧の行を選べばカードに戻る）

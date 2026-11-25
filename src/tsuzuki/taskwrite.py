@@ -1,6 +1,7 @@
 """タスクのフォルダーへ書き込む唯一のコード。
 
 書くのは「新しいタスクのフォルダーと task.md」と「既存の task.md の stage / waiting の行」だけ。
+あとは、頼まれたときにタスクのフォルダーをゴミ箱へ動かす（消さずに、動かすだけ）。
 """
 import os
 import re
@@ -10,9 +11,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from tsuzuki.tasks import STAGES, TASK_MD, parse_task_md
+from tsuzuki.tasks import SHARED_DIR, STAGES, TASK_MD, parse_task_md
 
 CHANGED = "task.md が変わりました。読み直してください"
+NO_TRASH = "このディスクのゴミ箱が見つかりません。Finder でゴミ箱に入れてください"
+CANNOT_TRASH = "ゴミ箱に入れられませんでした（%s）。Finder でゴミ箱に入れてください"
+NOT_A_TASK_FOLDER = "ゴミ箱に入れられるのはタスクのフォルダーだけです: %s"
 _BOM = "﻿"
 _ALLOWED_KEYS = ("stage", "waiting")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -101,6 +105,59 @@ def _check_inside(task_md: Path, tasks_root: Path) -> str:
     if os.path.basename(real) != TASK_MD or os.path.dirname(folder) != root or folder == root:
         raise TaskWriteError("タスクの置き場所の外には書けません: %s" % task_md)
     return real
+
+
+def _check_task_folder(task_dir: str, tasks_root: Path, message: str) -> str:
+    """task_dir の実体（シンボリックリンクを解いた先）が置き場所の直下のタスクのフォルダー（shared と
+    . で始まる名前を除く）であることを確かめ、その実体を返す。違えば message % task_dir で断る。"""
+    real = os.path.realpath(task_dir)
+    name = os.path.basename(real)
+    if (os.path.dirname(real) != os.path.realpath(str(tasks_root)) or not os.path.isdir(real)
+            or name == SHARED_DIR or name.startswith(".")):
+        raise TaskWriteError(message % task_dir)
+    return real
+
+
+def find_trash(path: str, home: str) -> Optional[str]:
+    """path と同じディスクのゴミ箱。ホームと同じディスクなら <home>/.Trash、違えば path のあるディスクの根の
+    .Trashes/<uid>（フォルダーで、書けるとき）。なければ None。"""
+    try:
+        dev = os.stat(path).st_dev
+        home_trash = os.path.join(home, ".Trash")
+        if os.path.isdir(home_trash) and os.stat(home_trash).st_dev == dev:
+            return home_trash
+        top = os.path.realpath(path)
+        while True:  # st_dev が変わる手前まで上へたどる
+            parent = os.path.dirname(top)
+            if parent == top or os.stat(parent).st_dev != dev:
+                break
+            top = parent
+    except OSError:
+        return None
+    trash = os.path.join(top, ".Trashes", str(os.getuid()))
+    return trash if os.path.isdir(trash) and os.access(trash, os.W_OK) else None
+
+
+def trash_task(task_dir: str, tasks_root: Path, *, home: str, claude_dir: Optional[Path] = None,
+               now: Optional[datetime] = None, trash_dir: Optional[str] = None) -> str:
+    """タスクのフォルダーをゴミ箱へ動かし、動かした先のパスを返す。同じ名前があれば「名前 HH.MM.SS」、
+    それもあれば「名前 HH.MM.SS 2」…にする。trash_dir を渡せば、ゴミ箱を探さない（テスト用）。"""
+    real = _check_task_folder(task_dir, tasks_root, NOT_A_TASK_FOLDER)
+    _refuse_claude_dir(tasks_root, claude_dir)
+    trash = trash_dir or find_trash(real, home)
+    if not trash:
+        raise TaskWriteError(NO_TRASH)
+    name = os.path.basename(real)
+    stamped = "%s %s" % (name, (now or datetime.now()).strftime("%H.%M.%S"))
+    target, n = os.path.join(trash, name), 1
+    while os.path.lexists(target):
+        target = os.path.join(trash, stamped if n == 1 else "%s %d" % (stamped, n))
+        n += 1
+    try:
+        os.rename(real, target)
+    except OSError as e:
+        raise TaskWriteError(CANNOT_TRASH % (e.strerror or e))
+    return target
 
 
 def set_fields(task_md: Path, tasks_root: Path, changes: Dict[str, str], *, expect_mtime: Optional[float] = None,

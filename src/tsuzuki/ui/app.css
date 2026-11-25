@@ -607,6 +607,7 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 }
 .cp:hover:not(:disabled) { border-color: var(--accent); }
 .cp:disabled { opacity: .45; cursor: default; }
+.task-card .foot { display: flex; justify-content: flex-end; margin-top: .9rem; padding-top: .6rem; border-top: 1px solid var(--border); }
 .task-card .link > .more { margin-left: auto; }  /* 会話の行の「外す」は右の端に */
 
 /* 右：新しいタスクの入力欄 */

@@ -1047,6 +1047,37 @@ class TaskServerTest(ServerCase):
         self.assertTrue(copy["command"].startswith("cd "))
         self.assertEqual(self.runner_calls, [])  # copy では何も起動しない
 
+    def test_task_trash(self):
+        trash = os.path.join(self.root, "trash")
+        os.makedirs(trash)
+        write_file(os.path.join(self.tasks_root, "2026-11-20-a", "a.md"), "# メモ\n")
+        self.reindex(tasks_root=Path(self.tasks_root))
+        with self.db() as conn:
+            conn.execute("INSERT INTO task_overrides (task, session_id, action, at) VALUES (?, ?, ?, ?)",
+                         ("2026-11-20-a", S1, "add", "2026-11-24T00:00:00Z"))
+            conn.commit()
+        with mock.patch("tsuzuki.taskwrite.find_trash", return_value=trash):
+            answer = self.action("/api/task-trash", {"task": "2026-11-20-a"}).json()
+        self.assertEqual(answer, {"ok": True, "needs_confirm": False, "message": server.TRASHED % self.tasks_root})
+        self.assertTrue(os.path.isfile(os.path.join(trash, "2026-11-20-a", "task.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.tasks_root, "2026-11-20-a")))
+        self.assertNotIn('data-task="2026-11-20-a"', self.frag("/frag/tasks?status=all"))
+        self.assertEqual(self.get("/frag/task/2026-11-20-a", cookie=True).status, 404)
+        with self.db() as conn:
+            for table in ("task_sessions", "task_overrides"):
+                self.assertIsNone(conn.execute("SELECT 1 FROM %s WHERE task = ?" % table,
+                                               ("2026-11-20-a",)).fetchone(), table)
+            self.assertIsNone(conn.execute("SELECT 1 FROM documents WHERE path LIKE ?",
+                                           (os.path.join(self.tasks_root, "2026-11-20-a") + "/%",)).fetchone())
+
+    def test_task_trash_refusals(self):
+        for task in ("nope", "shared"):
+            self.assertEqual(self.action("/api/task-trash", {"task": task}).json(),
+                             {"ok": False, "needs_confirm": False, "message": server.UNKNOWN_TASK})
+        self.assertEqual(self.post("/api/task-trash", {"task": "2026-11-20-a"}, cookie=True,
+                                   origin=self.origin).status, 403)  # CSRF なし
+        self.assertTrue(os.path.isdir(os.path.join(self.tasks_root, "2026-11-20-a")))
+
     # 断片
 
     def test_task_list_and_filters(self):

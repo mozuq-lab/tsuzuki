@@ -44,10 +44,10 @@ from tsuzuki.search import (DEFAULT_TARGETS, MAX_TERM_CHARS, MAX_TERMS, ORDERS, 
                            SearchQuery, SearchResult, parse_query, search)
 from tsuzuki.sources.live import LiveSession, live_sessions
 from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger
-from tsuzuki.taskindex import refresh_task
+from tsuzuki.taskindex import forget_task, refresh_task
 from tsuzuki.tasklinks import link_tasks, set_override
 from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, stage_label, within
-from tsuzuki.taskwrite import TaskWriteError, create_task, set_fields
+from tsuzuki.taskwrite import TaskWriteError, create_task, set_fields, trash_task
 
 TOKEN_FILE = "token"
 COOKIE = "tsuzuki_key"
@@ -105,6 +105,7 @@ UPDATE_FAILED = "更新に失敗しました: %s"
 # タスクの操作の答えの文
 NO_TASKS_ROOT = "タスクの置き場所が決まっていません"
 UNKNOWN_TASK = "台帳にないタスクです"
+TRASHED = "ゴミ箱に入れました。戻すときは、Finder でゴミ箱から %s へドラッグしてください"
 UNKNOWN_SESSION = "台帳にないセッションです"
 BAD_LINK_ACTION = "結び付けの操作が正しくありません"
 NO_TITLE = "題を入れてください"
@@ -900,6 +901,25 @@ def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     return _task_done(LINK_SET[action])
 
 
+def _api_task_trash(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """タスクのフォルダーをゴミ箱へ動かし、台帳から外す。動かせなかったときは台帳をそのままにする。"""
+    task = _task_text(data, "task")
+    root = app.tasks_root
+    if root is None:
+        return _task_failed(NO_TASKS_ROOT)
+    with update_lock(app.ledger_dir), app.connect() as conn:
+        folder = _task_folder(conn, task)
+        if folder is None:
+            return _task_failed(UNKNOWN_TASK)
+        try:
+            trash_task(folder, root, home=app.home, claude_dir=app.claude_dir)
+        except TaskWriteError as e:
+            return _task_failed(str(e))
+        forget_task(conn, task, folder)
+    app.forget_searches()
+    return _task_done(TRASHED % root)
+
+
 def _api_task_conversation(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """タスクから新しい会話を始める。copy なら何も起動せず、貼り付けるコマンドを command で返す。"""
     task, how = _task_text(data, "task"), _task_text(data, "how")
@@ -994,7 +1014,7 @@ def _finite(value: float) -> bool:
 _ACTIONS = {"/api/resume": _api_resume, "/api/open": _api_open, "/api/open-place": _api_open_place,
             "/api/reindex": _api_reindex, "/api/task-new": _api_task_new, "/api/task-stage": _api_task_stage,
             "/api/task-waiting": _api_task_waiting, "/api/task-link": _api_task_link,
-            "/api/task-conversation": _api_task_conversation,
+            "/api/task-conversation": _api_task_conversation, "/api/task-trash": _api_task_trash,
             }  # type: Dict[str, Callable[[App, Dict[str, Any]], Dict[str, Any]]]
 
 
