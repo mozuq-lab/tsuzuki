@@ -17,7 +17,7 @@ from tsuzuki.retention import iso_utc
 from tsuzuki.tasks import SHARED_DIR, STAGES, TaskFile, at_reference, no_waiting, stage_label, ticket_numbers
 from tsuzuki.taskviews import (DOC_BUNDLE_LIMIT, STATUS_LABELS, TASK_FILES_LIMIT, TaskDetail, TaskFileItem, TaskRow,
                               TaskSessionItem)
-from tsuzuki.ui_render import NO_RESUME, _attrs, _badges, _button, _e, _filter_row, _join, _n, _period, _tilde
+from tsuzuki.ui_render import _attrs, _badges, _button, _e, _filter_row, _join, _n, _period, _tilde
 
 NO_PLACE_ID = 0  # 左の「場所なし」を選ぶときの場所の ID（台帳の場所の ID は 1 から）
 # 左の状況：(サーバーの status, data-status の値, 言葉)。data-status の "" は既定（進行中と待ち）
@@ -27,8 +27,6 @@ GROUPS = ("active", "waiting", "done")  # 一覧の見出しの順
 HOW_LABELS = {"vscode": "VS Code", "vscode-terminal": "VS Code のターミナル", "terminal": "Terminal", "copy": "コピー"}
 FROM_PR = "PR の記録から"
 NO_CURRENT = "task.md に現在地がありません"  # taskviews の注意と同じ文。現在地の枠の中に添える
-NO_SESSION_TO_RESUME = "続きから開ける会話がありません"
-CANNOT_RESUME = "この会話は再開できません"
 NOT_IN_LEDGER = "台帳にない資料はコピーできません"
 NOT_INDEXED = "task.md はまだ台帳に入っていません"
 _PR_NUMBER = re.compile(r"/(\d+)/?$")
@@ -128,12 +126,12 @@ def _line2(r: TaskRow) -> str:
 # 右：タスクのカード
 
 def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = None,
-                   resume_command: Optional[str] = None) -> str:
-    """タスクのカード：題と4つのボタン、段階と待ち、現在地と次の一手、待っていること・
+                   vscode_terminal: bool = False) -> str:
+    """タスクのカード：題と3つのボタン、段階と待ち、現在地と次の一手、待っていること・
     決めたこと・チケット・ブランチと PR、会話、資料（3つの束）、一番下の「設定を変える」と「ゴミ箱に入れる」、
     注意の順。data-mtime は task.md の更新時刻を
-    そのままの精度で（repr）持ち、段階と待ちの操作がそれを送り返す。resume_command は、既定の再開がコピーの
-    ときに「続きから」がコピーする再開のコマンド（サーバーが台帳から作る）。home の下のパスは ~ で出す。"""
+    そのままの精度で（repr）持ち、段階と待ちの操作がそれを送り返す。home の下のパスは ~ で出す。
+    vscode_terminal は拡張 Tsuzuki Terminal を入れてあるか（入れてあれば、新しい会話のボタンが1つ増える）。"""
     row = d.row
     boxed = [w for w in d.warnings if w == NO_CURRENT]
     notes = [w for w in d.warnings if w != NO_CURRENT]
@@ -144,7 +142,7 @@ def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = 
     out = ["<div%s>" % _attrs(("class", "task-card"), ("data-task", row.name), ("data-mtime", repr(d.md_mtime)),
                               ("data-size", d.md_size)),
            '<div class="dh"><div class="head"><h4>%s</h4><div class="meta">%s</div></div><div class="btns">%s</div>'
-           '</div>' % (_e(row.title), meta, _card_buttons(d, resume_default, resume_command)),
+           '</div>' % (_e(row.title), meta, _card_buttons(d, resume_default, vscode_terminal)),
            _steps(row, d.sections.get("待っていること")), _status_box(d, boxed), _fields(d), _sessions(d.sessions), _documents(d, home)]
     out.append(_foot(d, home))
     out += ['<div class="notice">%s</div>' % _e(note) for note in notes]
@@ -164,32 +162,15 @@ def _foot(d: TaskDetail, home: Optional[str]) -> str:
         _button("ゴミ箱に入れる", "btn", ("data-action", "task-trash"), ("data-confirm", confirm)))
 
 
-def _card_buttons(d: TaskDetail, default: str, command: Optional[str]) -> str:
-    """続きから・新しい会話・@task.md をコピー・task.md を開く。続きからは、確定か推定（強）で結び付いた最新の
-    対話セッションを既定の再開の操作で開く（コピーなら再開のコマンドをコピーする）。続きから開けなければ
-    @task.md のコピーを目立たせる（作ったばかりのタスク）。"""
+def _card_buttons(d: TaskDetail, default: str, vscode_terminal: bool = False) -> str:
+    """新しい会話（拡張を入れてあり、既定がそれでなければ、VS Code のターミナルの分も）・@task.md をコピー・
+    task.md を開く。会話は「会話」の行から開いて再開する。"""
     how = HOW_LABELS.get(default, default)
-    sid = d.resume_session
-    found = next((item.row for item in d.sessions if item.row.id == sid), None) if sid else None
-    if not sid:
-        reason = NO_SESSION_TO_RESUME
-    elif found is not None and not found.transcript_exists:
-        reason = NO_RESUME
-    elif default == "copy" and not command:  # 作業ディレクトリがないなど、再開のコマンドを作れない
-        reason = CANNOT_RESUME
-    else:
-        reason = ""
-    if default == "copy":
-        action = [("data-action", "copy"), ("data-copy", command or "")]
-    else:
-        action = [("data-action", "resume"), ("data-session", sid or ""), ("data-how", default)]
-    resumable = not reason
     buttons = [
-        _button("続きから（%s）" % how, "btn pri" if resumable else "btn", *([("title", reason)] if reason else []),
-                *action, disabled=not resumable),
         _button("新しい会話（%s）" % how, "btn", ("data-action", "task-conversation"), ("data-how", default)),
-        _button("@task.md をコピー", "btn" if resumable else "btn pri", ("data-action", "copy"),
-                ("data-copy", at_reference(d.task_md))),
+        *([_button("新しい会話（%s）" % HOW_LABELS["vscode-terminal"], "btn", ("data-action", "task-conversation"),
+                   ("data-how", "vscode-terminal"))] if vscode_terminal and default != "vscode-terminal" else []),
+        _button("@task.md をコピー", "btn pri", ("data-action", "copy"), ("data-copy", at_reference(d.task_md))),
         _button("task.md を開く", "btn", *([("title", NOT_INDEXED)] if d.task_md_doc_id is None else []),
                 ("data-action", "open-doc"), ("data-doc", "" if d.task_md_doc_id is None else d.task_md_doc_id),
                 ("data-how", "vscode"), disabled=d.task_md_doc_id is None),

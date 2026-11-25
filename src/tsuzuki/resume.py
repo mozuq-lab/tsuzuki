@@ -13,12 +13,10 @@ from tsuzuki.config import Config
 from tsuzuki.sources.live import LiveSession
 from tsuzuki.tasks import TASK_MD, at_reference
 from tsuzuki.vscode_ext import NOT_INSTALLED, VSCodeTerminal
-from tsuzuki.workspace import WorkspaceError, first_folder
 
 VSCODE_URI = "vscode://anthropic.claude-code/open?session={session_id}"
 VSCODE_PROMPT_URI = "vscode://anthropic.claude-code/open?prompt={prompt}"
 NO_WORKSPACE = "ワークスペースが見つかりません: %s"
-BAD_WORKSPACE_FOLDER = "ワークスペースから最初のフォルダーを読めません: %s"
 STEP_TIMEOUT = 10  # 外のコマンド1つあたりの待ち秒数
 REASON_CHARS = 200  # 失敗の理由として出す、外のコマンドの stderr の1行の長さの上限
 
@@ -53,12 +51,11 @@ def applescript_quote(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def vscode_steps(cwd: str, session_id: str, app: str, window: Optional[str] = None) -> List[List[str]]:
-    """先にそのフォルダー（window があればそのワークスペース）の窓を前に出し、そのあとで URI を開く
-    （順番が逆だと別の窓で新しい会話が始まる）。"""
+def vscode_steps(cwd: str, session_id: str, app: str) -> List[List[str]]:
+    """先にそのフォルダーの窓を前に出し、そのあとで URI を開く（順番が逆だと別の窓で新しい会話が始まる）。"""
     if not is_session_id(session_id):
         raise ValueError("セッションの ID の形ではありません: %r" % (session_id,))
-    return [["open", "-a", app, window or cwd], ["open", VSCODE_URI.format(session_id=session_id)]]
+    return [["open", "-a", app, cwd], ["open", VSCODE_URI.format(session_id=session_id)]]
 
 
 def terminal_steps(cwd: str, session_id: str) -> List[List[str]]:
@@ -146,10 +143,8 @@ def _missing_workspace(workspace: Optional[str]) -> Optional[ActionOutcome]:
 
 def resume(conn: sqlite3.Connection, session_id: str, how: str, *, cfg: Config, live: Dict[str, LiveSession],
            confirm: bool, runner=_run, sleep=time.sleep, isdir=os.path.isdir,
-           terminal: Optional[VSCodeTerminal] = None, workspace: Optional[str] = None) -> ActionOutcome:
-    """how は vscode・vscode-terminal・terminal。vscode-terminal は terminal（依頼の書き先）が要る。
-    workspace（タスクのワークスペース）があれば、vscode・vscode-terminal はその窓で開く（terminal では見ない）。
-    vscode-terminal の作業ディレクトリはセッションの cwd のまま。"""
+           terminal: Optional[VSCodeTerminal] = None) -> ActionOutcome:
+    """how は vscode・vscode-terminal・terminal。vscode-terminal は terminal（依頼の書き先）が要る。"""
     if how not in ("vscode", "vscode-terminal", "terminal"):
         return ActionOutcome(False, False, "再開の方法が正しくありません")
     row = conn.execute("SELECT cwd, transcript_exists FROM sessions WHERE id = ?", (session_id,)).fetchone() \
@@ -161,18 +156,14 @@ def resume(conn: sqlite3.Connection, session_id: str, how: str, *, cfg: Config, 
         return ActionOutcome(False, False, "記録は削除済みのため再開できません")
     if not cwd or not isdir(cwd):
         return ActionOutcome(False, False, "作業ディレクトリが見つかりません: %s" % cwd)
-    if how != "terminal":
-        missing = _missing_workspace(workspace)
-        if missing:
-            return missing
     if session_id in live and not confirm:
         return ActionOutcome(False, True, "このセッションは今開いています。続けますか？")
     if how == "vscode":
-        return _execute(vscode_steps(cwd, session_id, cfg.vscode_app, workspace), "VS Code で開きました",
+        return _execute(vscode_steps(cwd, session_id, cfg.vscode_app), "VS Code で開きました",
                         runner=runner, sleep=sleep, delay_ms=cfg.vscode_uri_delay_ms)
     if how == "vscode-terminal":
         return _in_vscode_terminal(terminal, cwd, claude_resume(session_id), "VS Code のターミナルで開きました",
-                                   cfg=cfg, runner=runner, sleep=sleep, window=workspace)
+                                   cfg=cfg, runner=runner, sleep=sleep)
     return _execute(terminal_steps(cwd, session_id), "Terminal で開きました", runner=runner, sleep=sleep)
 
 
@@ -244,8 +235,9 @@ def terminal_new_steps(cwd: str, prompt: str) -> List[List[str]]:
 def start_conversation(conn: sqlite3.Connection, task: str, how: str, *, cfg: Config, runner=_run,
                        sleep=time.sleep, isdir=os.path.isdir, terminal: Optional[VSCodeTerminal] = None,
                        workspace: Optional[str] = None) -> ActionOutcome:
-    """workspace（タスクのワークスペース）があれば、vscode・vscode-terminal はその窓で開く。vscode-terminal の
-    作業ディレクトリは、ワークスペースの最初のフォルダー。terminal・copy は見ない。"""
+    """workspace（タスクのワークスペース）があれば、vscode・vscode-terminal はその窓で開く。vscode-terminal・
+    terminal・copy は、.code-workspace のあるフォルダーから始める（vscode のパネルは、VS Code が窓の最初の
+    フォルダーで始める）。"""
     if how not in ("vscode", "vscode-terminal", "terminal", "copy"):
         return ActionOutcome(False, False, "開き方が正しくありません")
     row = conn.execute("SELECT path, repo_resolved FROM tasks WHERE name = ?", (task,)).fetchone()
@@ -257,16 +249,13 @@ def start_conversation(conn: sqlite3.Connection, task: str, how: str, *, cfg: Co
         return ActionOutcome(False, False, "作業ディレクトリが見つかりません: %s" % cwd)
     prompt = conversation_prompt(cfg.new_conversation_prompt, os.path.join(task_dir, TASK_MD))
     window = None
-    if how in ("vscode", "vscode-terminal"):
+    if workspace is not None:
         missing = _missing_workspace(workspace)
         if missing:
             return missing
         window = workspace
-    if how == "vscode-terminal" and window is not None:
-        try:
-            cwd = first_folder(window)
-        except WorkspaceError as e:
-            return ActionOutcome(False, False, BAD_WORKSPACE_FOLDER % e)
+        if how != "vscode":
+            cwd = os.path.dirname(workspace)
     if how == "copy":
         return ActionOutcome(True, False, "コマンドをコピーしました", new_conversation_command(cwd, prompt))
     if how == "vscode":

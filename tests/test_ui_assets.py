@@ -186,15 +186,6 @@ class UiAssetsTest(unittest.TestCase):
         self.assertNotIn(".style", js)
         self.assertNotIn("setAttribute(\"style\"", js)
 
-    def test_resume_carries_the_task_of_the_card(self):
-        js = _asset("app.js")
-        resume = _function(js, "resumeSession")
-        self.assertRegex(resume, r"task: task|task,")
-        self.assertIn("resumeSession(sessionId, how, true, task)", resume)
-        table = re.search(r"\nconst ACTIONS = \{\n(.*?)\n\};", js, re.S).group(1)
-        entry = re.search(r'^ {2}"resume":.*?^ {2}\},?$|^ {2}"resume":.*$', table, re.M | re.S).group(0)
-        self.assertIn('closest(".task-card")', entry)
-
     def test_script_selects_only_rows_whose_id_fits_the_hash(self):
         # 台帳のセッション ID は UUID とは限らない。URL の # に残せない ID の行を選ぶと normalize で消え、
         # 最初の行の自動選択が同じ描画をくり返して画面が止まる。そうした行は ↑↓・クリック・自動選択で選ばない
@@ -520,8 +511,13 @@ class TaskViewAssetsTest(unittest.TestCase):
 
     def test_phase1_handlers_fit_the_task_card(self):
         js = _asset("app.js")
-        # 続きから：ボタンの data-session を先に見る（タスクのカードは状況カード .card の外）
-        self.assertIn("if (button.dataset.session) return button.dataset.session;", _function(js, "cardSession"))
+        # 再開はタスクのカードから送らない（続きからのボタンはない。⌘Enter もタスクの表示では何もしない）
+        self.assertNotIn("resumeTask", js)
+        self.assertNotIn("data-session", _function(js, "cardSession"))
+        self.assertNotIn("task-card", js[js.index('const ACTIONS = {'):js.index('"copy": (button)')])
+        self.assertNotIn("task", _function(js, "resumeSession").split("{", 1)[0])
+        self.assertNotIn("task:", _function(js, "resumeSession"))
+        self.assertNotIn("tasks", _function(js, "defaultResume"))
         # 会話の行は、セッションの表示へ移ってカードを開く
         self.assertIn('"card": (button) => openCard(button.dataset.session),', js)
         self.assertIn('v: "sessions"', _function(js, "openCard"))

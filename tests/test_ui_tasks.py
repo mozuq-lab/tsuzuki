@@ -119,7 +119,7 @@ def make_detail(*, stage="実装", stage_from_pr=False, warnings=(), file_path=N
                               title="API 一覧", relation="読んだ", doc_id=14)],
         sessions=[session_item(), session_item(id=S2, title="チケット 123 の古い会話", ended_at=t(10),
                                                rule="チケット番号", confidence="weak", label="推定（弱）")],
-        resume_session=S1, repo="/Users/me/dev/web-app", shared_total=1, other_total=1)
+        repo="/Users/me/dev/web-app", shared_total=1, other_total=1)
     values.update(kw)
     return TaskDetail(**values)
 
@@ -344,43 +344,52 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
 
     def test_card_buttons(self):
         html = frag_task_card(make_detail(), resume_default="vscode")
-        self.assertIn('<button class="btn pri" data-action="resume" data-session="%s" data-how="vscode">'
-                      '続きから（VS Code）</button>' % S1, html)
         self.assertIn('<button class="btn" data-action="task-conversation" data-how="vscode">'
                       '新しい会話（VS Code）</button>', html)
-        self.assertIn('<button class="btn" data-action="copy" data-copy="@%s/task.md">@task.md をコピー</button>'
+        self.assertIn('<button class="btn pri" data-action="copy" data-copy="@%s/task.md">@task.md をコピー</button>'
                       % TASK, html)
         self.assertIn('<button class="btn" data-action="open-doc" data-doc="11" data-how="vscode">task.md を開く'
                       '</button>', html)
-        in_vscode = frag_task_card(make_detail(), resume_default="vscode-terminal")
-        self.assertIn('data-how="vscode-terminal">続きから（VS Code のターミナル）', in_vscode)
-        self.assertIn('data-how="vscode-terminal">新しい会話（VS Code のターミナル）', in_vscode)
-        terminal = frag_task_card(make_detail(), resume_default="terminal")
-        self.assertIn('data-action="resume" data-session="%s" data-how="terminal">続きから（Terminal）' % S1, terminal)
-        self.assertIn('data-action="task-conversation" data-how="terminal">新しい会話（Terminal）', terminal)
-        # 既定がコピーなら、続きからは再開のコマンドをコピーする（コマンドはサーバーが渡す）
-        command = "cd '/w/my dir' && claude --resume " + S1
-        copy = frag_task_card(make_detail(), resume_default="copy", resume_command=command)
-        self.assertIn('<button class="btn pri" data-action="copy" data-copy="%s">続きから（コピー）</button>'
-                      % htmllib.escape(command), copy)
-        self.assertIn('data-action="task-conversation" data-how="copy">新しい会話（コピー）', copy)
-        self.assertIn('data-action="copy" data-copy="" disabled>続きから（コピー）',
+        self.assertIn('data-how="vscode-terminal">新しい会話（VS Code のターミナル）',
+                      frag_task_card(make_detail(), resume_default="vscode-terminal"))
+        self.assertIn('data-action="task-conversation" data-how="terminal">新しい会話（Terminal）',
+                      frag_task_card(make_detail(), resume_default="terminal"))
+        self.assertIn('data-action="task-conversation" data-how="copy">新しい会話（コピー）',
                       frag_task_card(make_detail(), resume_default="copy"))
 
-    def test_card_buttons_without_a_session_to_resume(self):
-        # 続きから開ける会話がなければ止め、@task.md のコピーを目立たせる（新しいタスクのカード）
-        html = frag_task_card(make_detail(resume_session=None, sessions=[], task_md_doc_id=None),
-                              resume_default="vscode")
-        self.assertIn('data-action="resume" data-session="" data-how="vscode" disabled>続きから（VS Code）', html)
+    def test_card_has_a_vscode_terminal_button_when_the_extension_is_installed(self):
+        extra = ('<button class="btn" data-action="task-conversation" data-how="vscode-terminal">'
+                 '新しい会話（VS Code のターミナル）</button>')
+        for default in ("vscode", "terminal", "copy"):
+            with self.subTest(default=default):
+                html = frag_task_card(make_detail(), resume_default=default, vscode_terminal=True)
+                self.assertIn('data-action="task-conversation" data-how="%s">' % default, html)
+                self.assertEqual(html.count("新しい会話（"), 2)
+                start = html.index('data-action="task-conversation" data-how="%s"' % default)
+                self.assertTrue(html[start:].split("</button>", 1)[1].startswith(extra))
+                self.assertNotIn(extra, frag_task_card(make_detail(), resume_default=default))
+                self.assertNotIn(extra, frag_task_card(make_detail(), resume_default=default, vscode_terminal=False))
+        # 既定がもう VS Code のターミナルなら、新しい会話のボタンは1つだけ
+        html = frag_task_card(make_detail(), resume_default="vscode-terminal", vscode_terminal=True)
+        self.assertEqual(html.count("新しい会話（"), 1)
+        self.assertEqual(html.count('data-how="vscode-terminal"'), 1)
+
+    def test_card_has_no_resume_button(self):
+        # タスクのカードに「続きから」はない（会話の行からセッションのカードを開いて再開する）
+        for default in ("vscode", "vscode-terminal", "terminal", "copy"):
+            with self.subTest(default=default):
+                html = frag_task_card(make_detail(), resume_default=default)
+                self.assertNotIn('data-action="resume"', html)
+                self.assertNotIn("続きから", html)
+                self.assertIn('class="btn pri" data-action="copy" data-copy="@%s/task.md"' % TASK, html)
+
+    def test_card_buttons_for_a_new_task(self):
+        # 作ったばかりのタスクのカード：会話がなく、task.md は台帳にまだない
+        html = frag_task_card(make_detail(sessions=[], task_md_doc_id=None), resume_default="vscode")
         self.assertIn('<button class="btn pri" data-action="copy" data-copy="@%s/task.md">@task.md をコピー'
                       % TASK, html)
         self.assertIn('data-action="open-doc" data-doc="" data-how="vscode" disabled>task.md を開く', html)
         self.assertIn("まだ会話はありません", html)
-        # 記録の消えたセッションは再開できない
-        gone = make_detail(sessions=[session_item(transcript_exists=False)])
-        html = frag_task_card(gone, resume_default="vscode")
-        self.assertIn('data-how="vscode" disabled>続きから（VS Code）', html)
-        self.assertIn('title="記録は削除済みのため再開できません"', html)
 
     def test_card_stages_and_waiting(self):
         html = frag_task_card(make_detail(stage="実装"), resume_default="vscode")
@@ -640,14 +649,12 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
             updated_at=EVIL, sections={k: EVIL for k in ("現在地", "次の一手", "待っていること", "決めたこと")},
             after=(EVIL, EVIL), warnings=[EVIL], ticket_url=EVIL, branch=EVIL, prs=[EVIL, "https://x.example/" + EVIL],
             folder_files=[evil_file], shared_docs=[evil_file], other_docs=[evil_file],
-            sessions=[session_item(id='x" onclick="alert(1)', title=EVIL, rule=EVIL, label=EVIL, live=True)],
-            resume_session='x" onclick="alert(1)')
+            sessions=[session_item(id='x" onclick="alert(1)', title=EVIL, rule=EVIL, label=EVIL, live=True)])
         fragments = {
             "filters": frag_task_filters({"open": 1, "done": 0, "all": 1}, [(4, EVIL, 1)], status="open", place=4,
                                          shared_place=7),
             "list": frag_task_list([row], selected=EVIL_NAME, status="open"),
             "card": frag_task_card(detail, resume_default="vscode", home=HOME),
-            "card-copy": frag_task_card(detail, resume_default="copy", resume_command=EVIL),
             "new": frag_new_task([(EVIL, EVIL)]),
             "settings": frag_task_settings(EVIL_NAME, TaskFile(title=EVIL, repo=EVIL), EVIL, repos=[(EVIL, EVIL)],
                                            mtime=1.5, size=2),
@@ -658,7 +665,6 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
                 self.assertIn(EVIL, m.text)
         self.assertEqual(Markup(fragments["list"]).values("data-task"), [EVIL_NAME])
         self.assertEqual(Markup(fragments["card"]).values("data-task"), [EVIL_NAME])
-        self.assertIn(EVIL, Markup(fragments["card-copy"]).values("data-copy"))
         self.assertIn(EVIL, Markup(fragments["new"]).values("value"))
         self.assertNotIn("href", fragments["card"].replace('href="https://x.example/', ""))
         # 悪意のある名前のファイルも、@ の形のまま属性に入り、属性を抜け出さない

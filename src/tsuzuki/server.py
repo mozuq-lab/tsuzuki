@@ -742,8 +742,7 @@ def _frag_tasks(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:
 
 
 def _frag_task(app: App, conn: sqlite3.Connection, name: str, p: _Params) -> str:
-    """タスクのカード。台帳の tasks にある名前だけ（ほかは 404）。既定の再開がコピーなら、「続きから」がコピーする
-    再開のコマンドを台帳から作って渡す。"""
+    """タスクのカード。台帳の tasks にある名前だけ（ほかは 404）。"""
     cfg = app.cfg
     if _task_folder(conn, name) is None:
         raise _HttpError(404, NOT_FOUND)
@@ -752,11 +751,8 @@ def _frag_task(app: App, conn: sqlite3.Connection, name: str, p: _Params) -> str
                                    max_depth=cfg.doc_scan.max_depth)
     if detail is None:
         raise _HttpError(404, NOT_FOUND)
-    command = None
-    if cfg.resume_default == "copy" and detail.resume_session:
-        session = views.session_detail(conn, detail.resume_session, live={}, home=app.home)
-        command = session.resume_command if session is not None else None
-    return ui_tasks.frag_task_card(detail, resume_default=cfg.resume_default, home=app.home, resume_command=command)
+    return ui_tasks.frag_task_card(detail, resume_default=cfg.resume_default, home=app.home,
+                                   vscode_terminal=app.vscode_terminal().installed())
 
 
 def _frag_new_task(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:
@@ -844,18 +840,9 @@ def _api_resume(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     session_id, how, confirm = _text_field(data, "session_id"), _text_field(data, "how"), data.get("confirm", False)
     if not isinstance(confirm, bool):
         raise _HttpError(400, BAD_REQUEST % "confirm")
-    task = data.get("task")
-    if task is not None and not isinstance(task, str):
-        raise _HttpError(400, BAD_REQUEST % "task")
     with app.connect() as conn:
-        workspace = None
-        if task is not None:
-            if _task_folder(conn, task) is None:
-                return _outcome(ActionOutcome(False, False, UNKNOWN_TASK))
-            workspace = _task_workspace(app, conn, task)
         return _outcome(resume(conn, session_id, how, cfg=app.cfg, live=app.live(), confirm=confirm,
-                               runner=app.runner, sleep=app.sleep, terminal=app.vscode_terminal(),
-                               workspace=workspace))
+                               runner=app.runner, sleep=app.sleep, terminal=app.vscode_terminal()))
 
 
 def _task_workspace(app: App, conn: sqlite3.Connection, task: str) -> Optional[str]:

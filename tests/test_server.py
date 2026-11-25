@@ -1016,21 +1016,19 @@ class TaskServerTest(ServerCase):
                 int(re.search(r'data-size="([^"]*)"', card).group(1)))
 
 
-    def test_resume_from_the_task_card_uses_the_workspace(self):
+    def test_resume_ignores_a_task_field(self):
+        # 続きの再開はタスクのワークスペースを使わない（task は読まない）
         ws_dir = os.path.join(self.root, "ws")
         os.makedirs(os.path.join(ws_dir, "app"))
         ws = os.path.join(ws_dir, "x.code-workspace")
         write_file(ws, json.dumps({"folders": [{"path": "app"}]}))
         write_file(self.task_md, (TASK_MD % self.proj).replace("repo:", "workspace: %s\nrepo:" % ws, 1))
         self.reindex(tasks_root=Path(self.tasks_root))
-        r = self.action("/api/resume", {"session_id": S1, "how": "vscode", "confirm": False, "task": "2026-11-20-a"})
-        self.assertTrue(r.json()["ok"], r.json())
-        self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", ws])
-        self.calls.clear()
-        r = self.action("/api/resume", {"session_id": S1, "how": "vscode", "confirm": False})
-        self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", self.proj])
-        r = self.action("/api/resume", {"session_id": S1, "how": "vscode", "task": "nope"})
-        self.assertEqual(r.json(), {"ok": False, "needs_confirm": False, "message": "台帳にないタスクです"})
+        for task in ("2026-11-20-a", "nope"):
+            self.calls.clear()
+            r = self.action("/api/resume", {"session_id": S1, "how": "vscode", "confirm": False, "task": task})
+            self.assertTrue(r.json()["ok"], r.json())
+            self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", self.proj])
 
     def test_task_fragments(self):
         self.assertIn('data-task="2026-11-20-a"', self.get("/frag/tasks", cookie=True).body)
@@ -1180,6 +1178,12 @@ class TaskServerTest(ServerCase):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path, cookie=True).status, 400)
 
+    def test_task_card_vscode_terminal_button(self):
+        extra = 'data-action="task-conversation" data-how="vscode-terminal">新しい会話（VS Code のターミナル）'
+        self.assertNotIn(extra, self.frag("/frag/task/2026-11-20-a"))
+        with mock.patch.object(server.VSCodeTerminal, "installed", return_value=True):
+            self.assertIn(extra, self.frag("/frag/task/2026-11-20-a"))
+
     def test_task_card(self):
         card = self.frag("/frag/task/2026-11-20-a")
         st = os.stat(self.task_md)
@@ -1193,12 +1197,12 @@ class TaskServerTest(ServerCase):
         with self.db() as conn:
             doc = conn.execute("SELECT id FROM documents WHERE path = ?", (self.task_md,)).fetchone()[0]
         self.assertIn('data-action="open-doc" data-doc="%d" data-how="vscode"' % doc, card)
-        # 既定の再開がコピーなら、続きからは再開のコマンドを持つ（結び付いた会話があるとき）
+        # 続きからのボタンはない（既定の再開がコピーでも）
         self.action("/api/task-link", {"task": "2026-11-20-a", "session_id": S1, "action": "add"})
         self.cfg.resume_default = "copy"
         copy = self.frag("/frag/task/2026-11-20-a")
-        self.assertIn('data-action="copy" data-copy="cd %s &amp;&amp; claude --resume %s">続きから（コピー）'
-                      % (self.proj, S1), copy)
+        self.assertNotIn("続きから", copy)
+        self.assertNotIn('data-action="resume"', copy)
         self.assertIn('data-action="task-unlink" data-session="%s"' % S1, copy)
         for path in ("/frag/task/", "/frag/task/a%2Fb", "/frag/task/.hidden", "/frag/task/_old", "/frag/task/%00",
                      "/frag/task/2026-11-20-a/x", "/frag/tasks/", "/frag/task"):
@@ -1428,6 +1432,17 @@ class TaskServerTest(ServerCase):
         self.assertEqual(copy["command"], "cd %s && claude '@%s を読んで、次の一手から進めてください。'"
                          % (self.proj, self.task_md))
         self.assertEqual(len(self.calls), 1)
+
+    def test_task_conversation_in_a_workspace(self):
+        ws_dir = os.path.join(self.root, "ws")
+        os.makedirs(os.path.join(ws_dir, "app"))
+        ws = os.path.join(ws_dir, "x.code-workspace")
+        write_file(ws, json.dumps({"folders": [{"path": "app"}]}))
+        write_file(self.task_md, (TASK_MD % self.proj).replace("repo:", "workspace: %s\nrepo:" % ws, 1))
+        self.reindex(tasks_root=Path(self.tasks_root))
+        copy = self.action("/api/task-conversation", {"task": "2026-11-20-a", "how": "copy"}).json()
+        self.assertTrue(copy["command"].startswith("cd %s && claude '" % ws_dir), copy["command"])
+        self.assertEqual(self.calls, [])
 
     def test_unknown_tasks_sessions_and_values(self):
         st = os.stat(self.task_md)

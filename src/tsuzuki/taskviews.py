@@ -97,7 +97,6 @@ class TaskDetail:
     shared_docs: List[TaskFileItem]
     other_docs: List[TaskFileItem]
     sessions: List[TaskSessionItem]
-    resume_session: Optional[str]
     repo: Optional[str]
     shared_total: int = 0  # 共通の資料の全部の数（shared_docs は DOC_BUNDLE_LIMIT まで）
     other_total: int = 0  # ほかの場所の資料の全部の数（other_docs は DOC_BUNDLE_LIMIT まで）
@@ -549,8 +548,7 @@ def task_detail(conn: sqlite3.Connection, name: str, *, live: Dict[str, LiveSess
                                                                                template=ticket_template),
         branch=branch, prs=prs, folder_files=folder_files, folder_cut=cut, shared_docs=shared[:DOC_BUNDLE_LIMIT],
         other_docs=other[:DOC_BUNDLE_LIMIT], sessions=_sessions_list(conn, name, live),
-        resume_session=interactive[0]["id"] if interactive else None, repo=repo, shared_total=len(shared),
-        other_total=len(other))
+        repo=repo, shared_total=len(shared), other_total=len(other))
 
 
 # tsuzuki task list（台帳を使わない）

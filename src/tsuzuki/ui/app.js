@@ -510,10 +510,7 @@ function moveSelection(step) {
 // 操作（data-action）
 
 const ACTIONS = {
-  "resume": (button) => {
-    const card = button.closest(".task-card");
-    resumeSession(cardSession(button), button.dataset.how, false, card ? card.dataset.task : undefined);
-  },
+  "resume": (button) => resumeSession(cardSession(button), button.dataset.how, false),
   "copy": (button) => copyText(button.dataset.copy),
   "conversation": (button) => go({ s: button.dataset.session, d: "", c: "1", t: button.dataset.turn || "" }, true),
   "card": (button) => openCard(button.dataset.session),
@@ -546,9 +543,8 @@ const ACTIONS = {
   "task-link": (button) => linkToTask(button),
 };
 
-// 再開するセッション：ボタンの data-session（タスクのカードの「続きから」）、なければ状況カードのセッション
+// 再開するセッション：状況カードのセッション
 function cardSession(button) {
-  if (button.dataset.session) return button.dataset.session;
   const card = button.closest(".card");
   return card ? card.dataset.session : state.s;
 }
@@ -929,12 +925,12 @@ async function act(path, body) {
   return answer;
 }
 
-async function resumeSession(sessionId, how, confirmed, task) {
+async function resumeSession(sessionId, how, confirmed) {
   if (!sessionId) return;
-  const answer = await post("/api/resume", { session_id: sessionId, how: how, confirm: Boolean(confirmed), task: task });
+  const answer = await post("/api/resume", { session_id: sessionId, how: how, confirm: Boolean(confirmed) });
   if (!answer) return;
   if (answer.needs_confirm && !confirmed) {
-    askToContinue(answer.message, () => resumeSession(sessionId, how, true, task));
+    askToContinue(answer.message, () => resumeSession(sessionId, how, true));
     return;
   }
   toast(answer.message);
@@ -950,12 +946,8 @@ async function copyText(text) {
   }
 }
 
-// ⌘Enter：選んだセッションを既定の方法（設定 resume_default）で再開する。タスクの表示では、カードの「続きから」
+// ⌘Enter：選んだセッションを既定の方法（設定 resume_default）で再開する。タスクの表示では何もしない
 async function defaultResume() {
-  if (state.v === "tasks") {
-    resumeTask();
-    return;
-  }
   if (state.v !== "sessions" || !state.s) return;
   if (RESUME_DEFAULT !== "copy") {
     resumeSession(state.s, RESUME_DEFAULT, false);
@@ -979,16 +971,6 @@ async function defaultResume() {
 }
 
 // タスクの操作。カードの外枠の data-task がどのタスクかを示す
-
-// 「続きから」はカードの頭のボタンの最初（既定の再開がコピーなら data-action が copy）。押せなければ理由を出す
-function resumeTask() {
-  const card = ui.detail.querySelector(".task-card");
-  if (!card || card.dataset.task !== state.task) return;
-  const button = card.querySelector('.dh [data-action="resume"], .dh [data-action="copy"]');
-  if (!button) return;
-  if (button.disabled) toast(button.title || "続きから開ける会話がありません");
-  else button.click();
-}
 
 // 段階と待ち（task.md の stage・waiting の行）。カードを出したときの task.md の更新時刻と大きさを送る。
 // data-mtime はサーバーが repr で書いた数なので、Number で読めば同じ float に戻る（その後に task.md が

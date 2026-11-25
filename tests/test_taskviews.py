@@ -248,7 +248,6 @@ class TaskViewsTest(unittest.TestCase):
                                                                         ("/r/missing.md", True)])
         self.assertEqual(d_.other_docs[0].relation, "読んだ")
         self.assertEqual(sorted(s.confidence for s in d_.sessions), ["confirmed", "weak"])
-        self.assertEqual(d_.resume_session, "s1")
 
     def test_other_docs_know_when_they_were_copied(self):
         with allow_system_tmp():

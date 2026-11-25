@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 import io
 import json
 import os
@@ -15,7 +16,7 @@ from tsuzuki.config import Config
 from tsuzuki.resume import (ActionOutcome, applescript_quote, is_session_id, open_document, open_place, resume,
                            resume_command, run_steps, terminal_steps, vscode_steps, conversation_prompt,
                            new_conversation_command, vscode_new_steps, terminal_new_steps, start_conversation,
-                           NO_WORKSPACE, BAD_WORKSPACE_FOLDER)
+                           NO_WORKSPACE)
 from tsuzuki.sources.live import LiveSession
 from tsuzuki.vscode_ext import EXTENSION_ID, NOT_INSTALLED, Editor, VSCodeTerminal
 from tests.fixtures import make_ledger
@@ -292,8 +293,7 @@ class VSCodeTerminalTest(ResumeTest):
 
 
 class WorkspaceTest(unittest.TestCase):
-    """タスクのワークスペースで開く。窓は .code-workspace、作業ディレクトリは再開ならセッションの cwd、
-    新しい会話なら最初のフォルダー。"""
+    """タスクのワークスペースで新しい会話を始める。窓は .code-workspace、作業ディレクトリはそのフォルダー。"""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -327,60 +327,41 @@ class WorkspaceTest(unittest.TestCase):
         (ext / "package.json").write_text("{}")
         return VSCodeTerminal(self.requests, str(home), token=lambda n: "a" * 32, editor=Editor("Visual Studio Code"))
 
-    def resume(self, how, workspace, terminal=None):
-        return resume(self.conn, SID, how, cfg=self.cfg, live={}, confirm=False, runner=self.runner,
-                      sleep=lambda s: None, isdir=lambda p: True, terminal=terminal, workspace=workspace)
-
     def start(self, how, workspace, terminal=None):
         return start_conversation(self.conn, "2026-11-20-a", how, cfg=self.cfg, runner=self.runner,
                                   sleep=lambda s: None, terminal=terminal, workspace=workspace)
 
-    def test_resume_in_a_workspace(self):
-        out = self.resume("vscode", self.ws)
-        self.assertTrue(out.ok)
-        self.assertEqual(self.calls, [["open", "-a", "Visual Studio Code", self.ws],
-                                      ["open", "vscode://anthropic.claude-code/open?session=" + SID]])
+    def test_resume_has_no_workspace(self):
+        self.assertNotIn("workspace", inspect.signature(resume).parameters)
 
-    def test_resume_in_the_terminal_of_a_workspace(self):
-        terminal = self.terminal()
-        out = self.resume("vscode-terminal", self.ws, terminal)
-        self.assertTrue(out.ok)
-        self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", self.ws])
-        request = json.loads((terminal.requests / ("a" * 32 + ".json")).read_text(encoding="utf-8"))
-        self.assertEqual(request["cwd"], "/w")
-
-    def test_resume_in_terminal_ignores_the_workspace(self):
-        out = self.resume("terminal", os.path.join(self.d, "gone.code-workspace"))
-        self.assertTrue(out.ok)
-        self.assertEqual(self.calls[0][0], "osascript")
-        self.assertIn("cd /w &&", " ".join(self.calls[0]))
+    def request_of(self, terminal):
+        return json.loads((terminal.requests / ("a" * 32 + ".json")).read_text(encoding="utf-8"))
 
     def test_new_conversation_in_a_workspace(self):
+        # パネルは窓の最初のフォルダー（VS Code の決まり）なので、今のまま（作業ディレクトリはタスク側）
         out = self.start("vscode", self.ws)
         self.assertTrue(out.ok)
         self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", self.ws])
+        self.assertTrue(self.calls[1][1].startswith("vscode://anthropic.claude-code/open?prompt="), self.calls[1])
         self.calls.clear()
         terminal = self.terminal()
         out = self.start("vscode-terminal", self.ws, terminal)
         self.assertTrue(out.ok)
         self.assertEqual(self.calls[0], ["open", "-a", "Visual Studio Code", self.ws])
-        request = json.loads((terminal.requests / ("a" * 32 + ".json")).read_text(encoding="utf-8"))
-        self.assertEqual(request["cwd"], os.path.join(self.ws_dir, "app"))
-        # terminal と copy は今のまま（作業ディレクトリはタスクのフォルダー）
-        gone = os.path.join(self.d, "gone.code-workspace")
-        out = self.start("copy", gone)
-        self.assertTrue(out.command.startswith("cd " + shlex.quote(self.task_dir)))
+        request = self.request_of(terminal)
+        self.assertEqual(request["cwd"], self.ws_dir)
+        self.assertTrue(request["command"].startswith("claude '"), request["command"])
         self.calls.clear()
-        out = self.start("terminal", gone)
+        out = self.start("copy", self.ws)
+        self.assertTrue(out.command.startswith("cd %s && claude '" % shlex.quote(self.ws_dir)), out.command)
+        out = self.start("terminal", self.ws)
         self.assertTrue(out.ok)
-        self.assertIn(shlex.quote(self.task_dir), " ".join(self.calls[0]))
+        self.assertIn("cd %s && claude" % shlex.quote(self.ws_dir), " ".join(self.calls[0]))
 
     def test_missing_workspace_opens_nothing(self):
         gone = os.path.join(self.d, "gone.code-workspace")
         terminal = self.terminal()
-        for how in ("vscode", "vscode-terminal"):
-            out = self.resume(how, gone, terminal)
-            self.assertEqual((out.ok, out.message), (False, NO_WORKSPACE % gone))
+        for how in ("vscode", "vscode-terminal", "terminal", "copy"):
             out = self.start(how, gone, terminal)
             self.assertEqual((out.ok, out.message), (False, NO_WORKSPACE % gone))
         self.assertEqual(self.calls, [])
@@ -391,20 +372,18 @@ class WorkspaceTest(unittest.TestCase):
         Path(plain).write_text("{}", encoding="utf-8")
         terminal = self.terminal()
         for bad in (plain, "w/x.code-workspace", "~/x.code-workspace"):
-            for how in ("vscode", "vscode-terminal"):
-                out = self.resume(how, bad, terminal)
-                self.assertEqual((out.ok, out.message), (False, NO_WORKSPACE % bad))
+            for how in ("vscode", "vscode-terminal", "terminal", "copy"):
                 out = self.start(how, bad, terminal)
                 self.assertEqual((out.ok, out.message), (False, NO_WORKSPACE % bad))
         self.assertEqual(self.calls, [])
 
-    def test_workspace_without_folders(self):
+    def test_workspace_without_folders_still_starts(self):
+        # 最初のフォルダーは読まない（始める場所は .code-workspace のあるフォルダー）
         Path(self.ws).write_text("{}", encoding="utf-8")
-        out = self.start("vscode-terminal", self.ws, self.terminal())
-        self.assertFalse(out.ok)
-        self.assertTrue(out.message.startswith(BAD_WORKSPACE_FOLDER % ""), out.message)
-        self.assertEqual(self.calls, [])
-        self.assertTrue(self.start("vscode", self.ws).ok)  # 窓はファイルで開くので、フォルダーは要らない
+        terminal = self.terminal()
+        self.assertTrue(self.start("vscode-terminal", self.ws, terminal).ok)
+        self.assertTrue(self.start("vscode", self.ws).ok)
+        self.assertEqual(self.request_of(terminal)["cwd"], self.ws_dir)
 
 
 class NewConversationTest(unittest.TestCase):
