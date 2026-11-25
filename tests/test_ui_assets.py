@@ -24,7 +24,7 @@ MAKE_DEMO = ROOT / "scripts" / "make_demo.py"
 # 断片の data-action（タスクの操作を含む）。app.js はすべてを受け持つ
 ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans", "open-doc", "open-place", "docs",
            "fold", "read-more", "task-stage", "task-waiting", "copy-picked", "task-unlink", "task-conversation",
-           "new-task", "task-open", "task-link", "task-trash"}
+           "new-task", "task-open", "task-link", "task-trash", "form-cancel"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
 HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く
@@ -36,6 +36,7 @@ FRAGMENT_CLASSES = (
     "moved", "nav", "none", "notice", "on", "other", "p", "path", "ph", "place", "place-ov", "pri", "pt", "r", "recap",
     "rel", "reply", "row", "sec", "t", "tiny", "tl", "tli", "tool", "tools", "turn", "ty", "u", "v", "via", "w", "who",
     "x",
+    "waiting-form",
 )
 COLOR_VARIABLES = ("--bg-primary", "--bg-secondary", "--bg-tertiary", "--border", "--text-primary", "--text-secondary",
                    "--text-tertiary", "--accent", "--selected-bg")
@@ -380,7 +381,15 @@ class TaskViewAssetsTest(unittest.TestCase):
             self.assertIn(part, write)
         self.assertIn('"task-stage": (button) => writeTask("/api/task-stage", button, '
                       '{ stage: button.dataset.stage }),', js)
-        self.assertIn('"task-waiting": (button) => writeTask("/api/task-waiting", button,', js)
+        self.assertIn('"task-waiting": (button) => openWaitingForm(button)', js)
+        submit = _function(js, "onSubmit")
+        for part in ('"waiting-form"', '"/api/task-waiting"', "reason:"):
+            self.assertIn(part, submit)
+        self.assertIn('"form-cancel": (button) => cancelForm(button)', js)
+        cancel = _function(js, "cancelForm")
+        self.assertIn('"task-settings"', cancel)
+        self.assertIn('load("detail", detailUrl(state), true)', cancel)
+        self.assertIn("form.hidden = true", cancel)
         unlink = _function(js, "unlinkSession")
         self.assertIn('sendTask("/api/task-link", { task: card.dataset.task, session_id: button.dataset.session, '
                       'action: "remove" })', unlink)

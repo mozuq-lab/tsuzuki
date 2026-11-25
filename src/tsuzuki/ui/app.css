@@ -558,6 +558,24 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 .arrow { font-size: 10px; color: var(--text-tertiary); }
 .steps .btn { margin-left: .6rem; }
 .note { font-size: 11px; color: var(--text-tertiary); }
+/* 待ちにする・待ちを解くときの、待っていることの入力欄（初めは hidden） */
+.waiting-form { margin: .45rem 0 .2rem; }
+.waiting-form[hidden] { display: none; }
+.waiting-form textarea {
+  display: block;
+  width: 100%;
+  max-width: 40rem;
+  margin-top: .25rem;
+  padding: .35rem .55rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  resize: vertical;
+}
+.waiting-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.waiting-form .btns { justify-content: flex-start; margin-top: .4rem; }
 /* 現在地と次の一手の枠（確認の #confirm .box とは別） */
 .task-card .box {
   margin: .6rem 0;

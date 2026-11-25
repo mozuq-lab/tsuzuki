@@ -9,15 +9,19 @@ import tempfile
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from tsuzuki.tasks import SHARED_DIR, STAGES, TASK_MD, parse_task_md
+from tsuzuki.tasks import _FENCE, _H1, _H2, SHARED_DIR, STAGES, TASK_MD, parse_task_md
 
 CHANGED = "task.md が変わりました。読み直してください"
 NO_TRASH = "このディスクのゴミ箱が見つかりません。Finder でゴミ箱に入れてください"
 CANNOT_TRASH = "ゴミ箱に入れられませんでした（%s）。Finder でゴミ箱に入れてください"
 NOT_A_TASK_FOLDER = "ゴミ箱に入れられるのはタスクのフォルダーだけです: %s"
+BAD_SECTION_LINE = "見出しやコードの囲みになる行は書けません: %s"
+WAITING_SECTION = "待っていること"
+NOTHING = "なし"
 _BOM = "﻿"
+_SECTION_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 _ALLOWED_KEYS = ("stage", "waiting")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -162,8 +166,6 @@ def trash_task(task_dir: str, tasks_root: Path, *, home: str, claude_dir: Option
 
 def set_fields(task_md: Path, tasks_root: Path, changes: Dict[str, str], *, expect_mtime: Optional[float] = None,
                expect_size: Optional[int] = None, claude_dir: Optional[Path] = None) -> None:
-    real = _check_inside(task_md, tasks_root)
-    _refuse_claude_dir(tasks_root, claude_dir)
     for key, value in changes.items():
         if key not in _ALLOWED_KEYS:
             raise TaskWriteError("変えられる項目は stage と waiting だけです: %s" % key)
@@ -171,6 +173,27 @@ def set_fields(task_md: Path, tasks_root: Path, changes: Dict[str, str], *, expe
             raise TaskWriteError("段階の値が正しくありません: %s" % value)
         if key == "waiting" and value not in ("true", "false"):
             raise TaskWriteError("waiting は true か false で指定してください: %s" % value)
+    _edit(task_md, tasks_root, lambda text: _rewrite(text, changes), expect_mtime=expect_mtime,
+          expect_size=expect_size, claude_dir=claude_dir)
+
+
+def set_waiting(task_md: Path, tasks_root: Path, *, waiting: bool, reason: Optional[str],
+                expect_mtime: Optional[float] = None, expect_size: Optional[int] = None,
+                claude_dir: Optional[Path] = None) -> None:
+    """waiting の行を書き、reason があれば「## 待っていること」の欄も同じ置き換えで書く（reason が None なら行だけ）。"""
+    content = None if reason is None else section_text(reason)
+
+    def transform(text: str) -> str:
+        new = _rewrite(text, {"waiting": "true" if waiting else "false"})
+        return new if content is None else replace_section(new, WAITING_SECTION, content)
+    _edit(task_md, tasks_root, transform, expect_mtime=expect_mtime, expect_size=expect_size, claude_dir=claude_dir)
+
+
+def _edit(task_md: Path, tasks_root: Path, transform: Callable[[str], str], *, expect_mtime: Optional[float],
+          expect_size: Optional[int], claude_dir: Optional[Path]) -> None:
+    """置き場所の確かめ、読み（カードの時刻と大きさが違えば CHANGED）、transform で作った全文での置き換え。"""
+    real = _check_inside(task_md, tasks_root)
+    _refuse_claude_dir(tasks_root, claude_dir)
     try:
         st = os.stat(real)
         if (expect_mtime is not None and st.st_mtime != expect_mtime) or \
@@ -183,8 +206,82 @@ def set_fields(task_md: Path, tasks_root: Path, changes: Dict[str, str], *, expe
         raise TaskWriteError("task.md を読めません: %s（%s）" % (task_md, e))
     if expect_size is not None and len(raw) != expect_size:
         raise TaskWriteError(CHANGED)
-    new_text = _rewrite(text, changes)
-    _replace_file(real, new_text, st.st_mode)
+    _replace_file(real, transform(text), st.st_mode)
+
+
+def section_text(text: str) -> str:
+    """欄に書く文を整える：改行を \\n にそろえ、各行の末尾の空白と前後の空行を除く。空なら「なし」。
+    見出しやコードの囲みになる行があれば断る（task.md の欄の区切りが変わってしまう）。"""
+    lines = [line.rstrip() for line in text.splitlines()]  # parse_task_md と同じ行の切り方
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    for line in lines:
+        if _SECTION_HEADING.match(line) or _H1.match(line) or _H2.match(line) or _FENCE.match(line):
+            raise TaskWriteError(BAD_SECTION_LINE % line)
+    return "\n".join(lines) or NOTHING
+
+
+def _bare(line: str) -> str:
+    """行末（splitlines の切れ目）を除いた行。"""
+    return line.splitlines()[0] if line else ""
+
+
+def _ended(line: str) -> bool:
+    return _bare(line) != line
+
+
+def replace_section(text: str, name: str, content: str) -> str:
+    """task.md の全文の、本文の「## name」の欄の中身を content にする。コードの囲みの中は見出しとしない
+    （parse_task_md と同じ）。欄がなければ「## 決めたこと」の前に、それもなければ終わりに足す。"""
+    bom = _BOM if text.startswith(_BOM) else ""
+    body = text[len(bom):]
+    first_break = body.find("\n")
+    nl = "\r\n" if first_break > 0 and body[first_break - 1] == "\r" else "\n"
+    lines = body.splitlines(True)  # type: List[str]  # parse_task_md と同じ行の切り方。行末はそのまま残す
+    start = 0
+    if lines and lines[0].strip() == "---":
+        close = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+        if close is None:
+            raise TaskWriteError("task.md の見出し情報が閉じていません。直してから変えてください")
+        start = close + 1
+    headings = []  # type: List[tuple]  # 囲みの外の # と ## の行：(行の番号, ## の名前か None)
+    fence = None  # type: Optional[str]
+    for i in range(start, len(lines)):
+        line = _bare(lines[i])
+        if fence is not None:
+            s = line.strip()
+            if len(s) >= len(fence) and s == fence[0] * len(s):
+                fence = None
+            continue
+        opened = _FENCE.match(line)
+        if opened:
+            fence = opened.group(1)
+        m2, m1 = _H2.match(line), _H1.match(line)
+        if m1 or m2:
+            headings.append((i, m2.group(1) if m2 else None))
+    if fence is not None:
+        raise TaskWriteError("task.md のコードの囲みが閉じていません。直してから変えてください")
+    new_lines = [part + nl for part in content.split("\n")]
+    found = next((i for i, h in headings if h == name), None)
+    if found is not None:
+        end = next((i for i, _ in headings if i > found), len(lines))
+        head = lines[found] if _ended(lines[found]) else lines[found] + nl
+        tail = [nl] if end < len(lines) else []
+        lines[found:end] = [head] + new_lines + tail
+    else:
+        block = ["## %s%s" % (name, nl)] + new_lines
+        before = next((i for i, h in headings if h == "決めたこと"), None)
+        if before is not None:
+            lines[before:before] = block + [nl]
+        else:
+            if lines and not _ended(lines[-1]):
+                lines[-1] += nl
+            if lines[start:] and lines[-1].strip():
+                lines.append(nl)
+            lines += block
+    return bom + "".join(lines)
 
 
 def _rewrite(text: str, changes: Dict[str, str]) -> str:

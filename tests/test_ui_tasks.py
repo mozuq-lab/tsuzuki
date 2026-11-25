@@ -25,9 +25,9 @@ EVIL_FILE = '<img src=x onerror=alert(1)>"\'&amp;.md'
 
 ALLOWED_TAGS = {"div", "span", "em", "h4", "button", "br", "p", "ul", "ol", "li", "pre", "code", "blockquote", "hr",
                 "table", "thead", "tbody", "tr", "th", "td", "strong", "a", "h1", "h2", "h3", "h5", "h6", "input",
-                "form", "label", "select", "option"}
+                "form", "label", "select", "option", "textarea"}
 ALLOWED_ATTRS = {"class", "id", "disabled", "title", "href", "rel", "target", "align", "start", "aria-label", "type",
-                 "name", "value", "required", "maxlength", "placeholder", "autocomplete", "spellcheck"}
+                 "name", "value", "required", "maxlength", "placeholder", "autocomplete", "spellcheck", "rows", "hidden"}
 
 
 class Markup(HTMLParser):
@@ -372,6 +372,29 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         done = frag_task_card(make_detail(row=make_row(status="done", stage="完了")), resume_default="vscode")
         self.assertNotIn('data-action="task-waiting"', done)
         self.assertIn('class="stp cur" data-action="task-stage" data-stage="完了"', done)
+
+    def test_waiting_form(self):
+        html = frag_task_card(make_detail(), resume_default="vscode")
+        self.assertEqual(html.count('class="waiting-form"'), 1)
+        form = re.search(r'<form class="waiting-form" data-waiting="true" hidden[^>]*>(.*?)</form>', html).group(1)
+        self.assertIn('<div class="lab">何を待っていますか（task.md の『待っていること』に書きます）</div>', form)
+        self.assertIn('<textarea name="reason" rows="4" maxlength="4000"></textarea>', form)
+        self.assertIn('<button type="submit" class="btn pri">待ちにする</button>', form)
+        self.assertIn('<button type="button" class="btn" data-action="form-cancel">やめる</button>', form)
+        self.assertLess(html.index('class="steps"'), html.index('class="waiting-form"'))
+        waiting = frag_task_card(make_detail(row=make_row(status="waiting"), sections={"待っていること": EVIL}),
+                                 resume_default="vscode")
+        form = re.search(r'<form class="waiting-form" data-waiting="false" hidden[^>]*>(.*?)</form>', waiting).group(1)
+        self.assertIn('<div class="lab">待っていることを直してから解きます（task.md の『待っていること』に書きます）</div>',
+                      form)
+        self.assertIn('rows="4" maxlength="4000">%s</textarea>' % htmllib.escape(EVIL), form)
+        self.assertIn('>待ちを解く</button>', form)
+        done = frag_task_card(make_detail(row=make_row(status="done", stage="完了")), resume_default="vscode")
+        self.assertNotIn("waiting-form", done)
+        # 「なし」は空の入力欄にする
+        none = frag_task_card(make_detail(row=make_row(status="waiting"), sections={"待っていること": "なし"}),
+                              resume_default="vscode")
+        self.assertIn('maxlength="4000"></textarea>', none)
 
     def test_card_current_and_next(self):
         html = frag_task_card(make_detail(), resume_default="vscode")

@@ -9,9 +9,9 @@ from unittest import mock
 
 from tsuzuki.tasks import parse_task_md
 from tsuzuki import taskwrite
-from tsuzuki.taskwrite import (CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
-                              find_trash, normalize_short_name, normalize_ticket, render_task_md, set_fields,
-                              trash_task)
+from tsuzuki.taskwrite import (BAD_SECTION_LINE, CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
+                              find_trash, normalize_short_name, normalize_ticket, render_task_md, section_text,
+                              set_fields, set_waiting, trash_task)
 from tests.fixtures import allow_system_tmp, run_cli
 
 TEMPLATE = (
@@ -160,6 +160,130 @@ class SetFieldsTest(_TmpCase):
         os.chmod(str(md), 0o640)
         set_fields(md, self.root, {"waiting": "true"})
         self.assertEqual(stat.S_IMODE(md.stat().st_mode), 0o640)
+
+
+class WaitingTest(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.root.mkdir()
+
+    def task_md(self, text=TEMPLATE):
+        d = self.root / "2026-11-22-x"
+        d.mkdir(exist_ok=True)
+        md = d / "task.md"
+        md.write_bytes(text.encode("utf-8"))
+        return md
+
+    def test_waiting_with_a_reason(self):
+        md = self.task_md()
+        set_waiting(md, self.root, waiting=True, reason="山田さんの返事\n- API の仕様")
+        text = md.read_text(encoding="utf-8")
+        parsed = parse_task_md(text)
+        self.assertTrue(parsed.waiting)
+        self.assertEqual(parsed.sections["待っていること"], "山田さんの返事\n- API の仕様")
+        self.assertEqual(text[text.index("## 決めたこと"):], TEMPLATE[TEMPLATE.index("## 決めたこと"):])
+        self.assertEqual(text[:text.index("waiting:")], TEMPLATE[:TEMPLATE.index("waiting:")])
+        self.assertIn("## 次の一手\n\n## 待っていること\n山田さんの返事\n- API の仕様\n\n## 決めたこと", text)
+
+    def test_unwaiting_writes_the_edited_text(self):
+        md = self.task_md()
+        set_waiting(md, self.root, waiting=True, reason="返事")
+        set_waiting(md, self.root, waiting=False, reason="")
+        parsed = parse_task_md(md.read_text(encoding="utf-8"))
+        self.assertFalse(parsed.waiting)
+        self.assertEqual(parsed.sections["待っていること"], "なし")
+        set_waiting(md, self.root, waiting=False, reason="CI の結果")
+        self.assertEqual(parse_task_md(md.read_text(encoding="utf-8")).sections["待っていること"], "CI の結果")
+
+    def test_reason_none_leaves_the_section_alone(self):
+        md = self.task_md()
+        set_waiting(md, self.root, waiting=True, reason=None)
+        self.assertEqual(md.read_text(encoding="utf-8"), TEMPLATE.replace("waiting: false", "waiting: true"))
+
+    def test_reason_lines_starting_with_a_ticket_are_kept(self):
+        md = self.task_md()
+        set_waiting(md, self.root, waiting=True, reason="#123 の返事待ち")
+        self.assertEqual(parse_task_md(md.read_text(encoding="utf-8")).sections["待っていること"], "#123 の返事待ち")
+        before = md.read_bytes()
+        for bad in ("## 次", "# 題", "   ### x", "```", "~~~", "返事\n## 次\nあと"):
+            with self.assertRaises(TaskWriteError, msg=bad) as cm:
+                set_waiting(md, self.root, waiting=True, reason=bad)
+            self.assertTrue(str(cm.exception).startswith(BAD_SECTION_LINE % ""), str(cm.exception))
+            self.assertEqual(md.read_bytes(), before)
+
+    def test_section_text(self):
+        self.assertEqual(section_text(" \r\n\n  "), "なし")
+        self.assertEqual(section_text("\n a  \r\nb\t\n\n"), " a\nb")
+
+    def test_section_inside_a_fence_is_not_touched(self):
+        text = TEMPLATE.replace("## 決めたこと\n", "## 決めたこと\n```\n## 待っていること\n偽物\n```\n")
+        md = self.task_md(text)
+        set_waiting(md, self.root, waiting=True, reason="本物")
+        new = md.read_text(encoding="utf-8")
+        self.assertIn("```\n## 待っていること\n偽物\n```\n", new)
+        self.assertIn("## 待っていること\n本物\n\n## 決めたこと", new)
+        self.assertEqual(parse_task_md(new).sections["待っていること"], "本物")
+
+    def test_missing_section_is_added_before_decisions(self):
+        text = TEMPLATE.replace("## 待っていること\nなし\n\n", "")
+        md = self.task_md(text)
+        set_waiting(md, self.root, waiting=True, reason="返事")
+        self.assertIn("## 次の一手\n\n## 待っていること\n返事\n\n## 決めたこと\n", md.read_text(encoding="utf-8"))
+        bare = self.task_md("---\nwaiting: false\n---\n# 題\n\n## 目的\nx")
+        set_waiting(bare, self.root, waiting=True, reason="返事")
+        self.assertEqual(bare.read_text(encoding="utf-8"),
+                         "---\nwaiting: true\n---\n# 題\n\n## 目的\nx\n\n## 待っていること\n返事\n")
+
+    def test_last_section_has_no_trailing_blank_line(self):
+        md = self.task_md("---\nwaiting: false\n---\n## 待っていること\nなし\n")
+        set_waiting(md, self.root, waiting=True, reason="返事")
+        self.assertEqual(md.read_text(encoding="utf-8"), "---\nwaiting: true\n---\n## 待っていること\n返事\n")
+
+    def test_crlf_and_bom_are_kept(self):
+        md = self.task_md("\ufeff" + TEMPLATE.replace("\n", "\r\n"))
+        set_waiting(md, self.root, waiting=True, reason="返事\n二行目")
+        raw = md.read_bytes().decode("utf-8")
+        self.assertTrue(raw.startswith("\ufeff---\r\n"))
+        self.assertNotRegex(raw, r"(?<!\r)\n")
+        self.assertIn("## 待っていること\r\n返事\r\n二行目\r\n\r\n## 決めたこと", raw)
+        self.assertEqual(parse_task_md(raw).sections["待っていること"], "返事\n二行目")
+
+    def test_lines_that_parse_as_headings_are_refused(self):
+        md = self.task_md()
+        before = md.read_bytes()
+        for bad in ("返事\n##\u3000決めたこと\n偽の決定", "A\n#\u3000B\nC", "返事\u2028## 決めたこと\n偽", "x\x0c# 題"):
+            with self.assertRaises(TaskWriteError, msg=repr(bad)) as cm:
+                set_waiting(md, self.root, waiting=True, reason=bad)
+            self.assertTrue(str(cm.exception).startswith(BAD_SECTION_LINE % ""), str(cm.exception))
+            self.assertEqual(md.read_bytes(), before)
+
+    def test_unclosed_fence_refuses_and_writes_nothing(self):
+        for text in (TEMPLATE.replace("## 待っていること\nなし\n", "## 待っていること\n```\n"),
+                     TEMPLATE.replace("## 現在地\n", "## 現在地\n```\n")):
+            md = self.task_md(text)
+            before = md.read_bytes()
+            with self.assertRaises(TaskWriteError) as cm:
+                set_waiting(md, self.root, waiting=True, reason="なし")
+            self.assertIn("コードの囲みが閉じていません", str(cm.exception))
+            self.assertEqual(md.read_bytes(), before)
+
+    def test_section_span_follows_splitlines(self):
+        md = self.task_md(TEMPLATE.replace("## 決めたこと\n", "古い\u2028## 決めたこと\n中身\n"))
+        set_waiting(md, self.root, waiting=True, reason="返事")
+        parsed = parse_task_md(md.read_text(encoding="utf-8"))
+        self.assertEqual(parsed.sections["待っていること"], "返事")
+        self.assertEqual(parsed.sections["決めたこと"], "中身")
+
+    def test_waiting_reason_refuses_a_stale_card(self):
+        md = self.task_md()
+        st = md.stat()
+        before = md.read_bytes()
+        for kw in ({"expect_mtime": st.st_mtime - 10, "expect_size": st.st_size},
+                   {"expect_mtime": st.st_mtime, "expect_size": st.st_size + 1}):
+            with self.assertRaises(TaskWriteError) as cm:
+                set_waiting(md, self.root, waiting=True, reason="返事", **kw)
+            self.assertEqual(str(cm.exception), CHANGED)
+            self.assertEqual(md.read_bytes(), before)
 
 
 class TrashTest(_TmpCase):

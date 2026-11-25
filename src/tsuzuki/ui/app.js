@@ -487,7 +487,8 @@ const ACTIONS = {
   "read-more": (button) => readMore(button),
   // タスク
   "task-stage": (button) => writeTask("/api/task-stage", button, { stage: button.dataset.stage }),
-  "task-waiting": (button) => writeTask("/api/task-waiting", button, { waiting: button.dataset.waiting === "true" }),
+  "task-waiting": (button) => openWaitingForm(button),
+  "form-cancel": (button) => cancelForm(button),
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
   "task-trash": (button) => trashTask(button),
@@ -950,6 +951,24 @@ function writeTask(path, button, fields) {
     size: Number(card.dataset.size) }, fields));
 }
 
+// 「待ちにする」「待ちを解く」：待っていることの入力欄を出す（送るのは入力欄の「待ちにする」「待ちを解く」）
+function openWaitingForm(button) {
+  const card = button.closest(".task-card");
+  const form = card ? card.querySelector(".waiting-form") : null;
+  if (!form) return;
+  form.hidden = false;
+  const reason = form.elements.reason;
+  if (reason) reason.focus();
+}
+
+// 入力欄の「やめる」：設定の欄（#task-settings）は、カードを取り直して元に戻す。ほかの欄は閉じる
+function cancelForm(button) {
+  const form = button.closest("form");
+  if (!form) return;
+  if (form.id === "task-settings") load("detail", detailUrl(state), true);
+  else form.hidden = true;
+}
+
 // 会話の行の「外す」：このセッションをタスクから外す（利用者が外した記録は、台帳を作り直しても残る）
 function unlinkSession(button) {
   const card = button.closest(".task-card");
@@ -1072,9 +1091,14 @@ async function openNewTask() {
 
 function onSubmit(event) {
   const form = event.target;
-  if (!(form instanceof HTMLFormElement) || form.id !== "new-task") return;
-  event.preventDefault(); // フォームそのものは送らない（ページを読み直さない）
-  createTask(form);
+  if (!(form instanceof HTMLFormElement)) return;
+  if (form.id === "new-task") {
+    event.preventDefault(); // フォームそのものは送らない（ページを読み直さない）
+    createTask(form);
+  } else if (form.classList.contains("waiting-form")) {
+    event.preventDefault();
+    writeTask("/api/task-waiting", form, { waiting: form.dataset.waiting === "true", reason: form.elements.reason.value });
+  }
 }
 
 // 新しいタスクを作る（題と短い名前は入力欄の required で確かめ済み）。作れたらそのカードを開き、

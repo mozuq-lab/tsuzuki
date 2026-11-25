@@ -47,7 +47,7 @@ from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger
 from tsuzuki.taskindex import forget_task, refresh_task
 from tsuzuki.tasklinks import link_tasks, set_override
 from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, stage_label, within
-from tsuzuki.taskwrite import TaskWriteError, create_task, set_fields, trash_task
+from tsuzuki.taskwrite import TaskWriteError, create_task, set_fields, set_waiting, trash_task
 
 TOKEN_FILE = "token"
 COOKIE = "tsuzuki_key"
@@ -878,9 +878,14 @@ def _api_task_stage(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 
 def _api_task_waiting(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     task, waiting = _task_text(data, "task"), _task_flag(data, "waiting")
+    reason = _task_text(data, "reason") if "reason" in data else None
     mtime, size = _task_stamp(data)
-    return _set_task_fields(app, task, {"waiting": "true" if waiting else "false"}, mtime, size,
-                            WAITING_SET[waiting])
+    if reason is None:
+        return _set_task_fields(app, task, {"waiting": "true" if waiting else "false"}, mtime, size,
+                                WAITING_SET[waiting])
+    return _write_task_md(app, task, lambda md, root: set_waiting(
+        md, root, waiting=waiting, reason=reason, expect_mtime=mtime, expect_size=size, claude_dir=app.claude_dir),
+        WAITING_SET[waiting])
 
 
 def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -933,8 +938,15 @@ def _api_task_conversation(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 
 def _set_task_fields(app: App, task: str, changes: Dict[str, str], mtime: float, size: int,
                      done: str) -> Dict[str, Any]:
-    """task.md の stage か waiting の行を書き換える。カードを出したときの更新時刻と大きさ（mtime・size）と違えば
-    書かない（taskwrite.CHANGED）。書けなかったときもタスクを読み直す（画面が読み直せば、今の時刻で送れる）。"""
+    """task.md の stage か waiting の行を書き換える（書き方は _write_task_md）。"""
+    return _write_task_md(app, task, lambda md, root: set_fields(
+        md, root, changes, expect_mtime=mtime, expect_size=size, claude_dir=app.claude_dir), done)
+
+
+def _write_task_md(app: App, task: str, write: Callable[[Path, Path], None], done: str) -> Dict[str, Any]:
+    """台帳の行のフォルダーの task.md に write(task.md, 置き場所) で書く。write はカードを出したときの更新時刻と
+    大きさ（mtime・size）と違えば書かない（taskwrite.CHANGED）。書けなかったときもタスクを読み直す（画面が
+    読み直せば、今の時刻で送れる）。"""
     root = app.tasks_root
     if root is None:
         return _task_failed(NO_TASKS_ROOT)
@@ -942,9 +954,8 @@ def _set_task_fields(app: App, task: str, changes: Dict[str, str], mtime: float,
         folder = _task_folder(conn, task)
         if folder is None:
             return _task_failed(UNKNOWN_TASK)
-        try:  # 書く先は台帳の行のフォルダーの task.md。set_fields が置き場所の直下にあることも確かめる
-            set_fields(Path(folder) / TASK_MD, root, changes, expect_mtime=mtime, expect_size=size,
-                       claude_dir=app.claude_dir)
+        try:  # 書く先は台帳の行のフォルダーの task.md。write が置き場所の直下にあることも確かめる
+            write(Path(folder) / TASK_MD, root)
             answer = _task_done(done)
         except TaskWriteError as e:
             answer = _task_failed(str(e))

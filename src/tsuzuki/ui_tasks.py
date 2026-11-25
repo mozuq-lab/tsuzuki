@@ -132,7 +132,7 @@ def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = 
                               ("data-size", d.md_size)),
            '<div class="dh"><div class="head"><h4>%s</h4><div class="meta">%s</div></div><div class="btns">%s</div>'
            '</div>' % (_e(row.title), meta, _card_buttons(d, resume_default, resume_command)),
-           _steps(row), _status_box(d, boxed), _fields(d), _sessions(d.sessions), _documents(d, home)]
+           _steps(row, d.sections.get("待っていること")), _status_box(d, boxed), _fields(d), _sessions(d.sessions), _documents(d, home)]
     out.append(_foot(d, home))
     out += ['<div class="notice">%s</div>' % _e(note) for note in notes]
     out.append("</div>")
@@ -182,9 +182,10 @@ def _card_buttons(d: TaskDetail, default: str, command: Optional[str]) -> str:
     return "".join(buttons)
 
 
-def _steps(row: TaskRow) -> str:
-    """7つの段階（今の段階に cur、前の段階に done）と、待ちの付け外し（完了したタスクには出さない）。PR の記録から
-    段階を出しているときは、そう添える（押せば task.md に書く）。"""
+def _steps(row: TaskRow, waiting_text: Optional[str]) -> str:
+    """7つの段階（今の段階に cur、前の段階に done）と、待ちの付け外し（完了したタスクには出さない）。待ちの
+    ボタンは、待っていることの入力欄（初めは hidden）を開く。PR の記録から段階を出しているときは、そう添える
+    （押せば task.md に書く）。"""
     current = STAGES.index(row.stage) if row.stage in STAGES else -1
     steps = []
     for i, stage in enumerate(STAGES):
@@ -198,7 +199,23 @@ def _steps(row: TaskRow) -> str:
     out = '<div class="steps">%s%s</div>' % ('<span class="arrow">›</span>'.join(steps), toggle)
     if row.stage_from_pr:
         out += '<div class="note">%s「PR」と出しています。段階を押すと task.md に書きます</div>' % FROM_PR
+    if row.status != "done":
+        out += _waiting_form(row.status == "waiting", "" if no_waiting(waiting_text) else (waiting_text or "").strip())
     return out
+
+
+def _waiting_form(waiting: bool, reason: str) -> str:
+    """待ちにする・待ちを解くときに、task.md の「待っていること」へ書く文を入れる欄（待ちを解くときは、今の文を直す）。"""
+    if waiting:
+        lab, submit = "待っていることを直してから解きます（task.md の『待っていること』に書きます）", "待ちを解く"
+    else:
+        lab, submit = "何を待っていますか（task.md の『待っていること』に書きます）", "待ちにする"
+    return ('<form%s autocomplete="off"><div class="lab">%s</div>'
+            '<textarea name="reason" rows="4" maxlength="4000">%s</textarea>'
+            '<div class="btns"><button type="submit" class="btn pri">%s</button>'
+            '<button type="button" class="btn" data-action="form-cancel">やめる</button></div></form>' % (
+                _attrs(("class", "waiting-form"), ("data-waiting", "false" if waiting else "true")) + " hidden",
+                _e(lab), _e(reason), submit))
 
 
 def _status_box(d: TaskDetail, notes: Sequence[str]) -> str:

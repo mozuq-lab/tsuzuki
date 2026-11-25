@@ -22,6 +22,7 @@ from tsuzuki import cli, documents, indexer, server
 from tsuzuki.config import Config
 from tsuzuki.indexer import update
 from tsuzuki.server import COOKIE, TOKEN_FILE, make_server, serve
+from tsuzuki.tasks import parse_task_md
 from tsuzuki.taskwrite import CHANGED, TaskWriteError
 from tests.fixtures import FakeClaude, assistant, make_git_repo, make_ledger, sid, t, tool_result, user, write_file
 
@@ -1177,6 +1178,31 @@ class TaskServerTest(ServerCase):
             self.assertEqual(self.get("/", cookie=True).body, '<meta name="tsuzuki-has-tasks" content="0">')
 
     # 操作
+
+    def test_task_waiting_with_a_reason(self):
+        stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
+        r = self.action("/api/task-waiting", {"task": "2026-11-20-a", "waiting": True, "reason": "#45 のレビュー",
+                                              "mtime": stamp[0], "size": stamp[1]})
+        self.assertEqual(r.json(), {"ok": True, "needs_confirm": False, "message": "待ちにしました"})
+        text = self.text()
+        self.assertIn("waiting: true\n", text)
+        self.assertEqual(parse_task_md(text).sections["待っていること"], "#45 のレビュー")
+        card = self.frag("/frag/task/2026-11-20-a")
+        self.assertIn('<div class="k">待っていること</div><div class="v"><div class="md"><p>#45 のレビュー</p>', card)
+        # 古いカードの時刻では書かない
+        stale = self.action("/api/task-waiting", {"task": "2026-11-20-a", "waiting": False, "reason": "x",
+                                                  "mtime": stamp[0], "size": stamp[1]})
+        self.assertEqual(stale.json(), {"ok": False, "needs_confirm": False, "message": CHANGED})
+        # 見出しになる行は断る
+        stamp = self.card_stamp(card)
+        bad = self.action("/api/task-waiting", {"task": "2026-11-20-a", "waiting": False, "reason": "## x",
+                                                "mtime": stamp[0], "size": stamp[1]}).json()
+        self.assertFalse(bad["ok"])
+        self.assertIn("見出し", bad["message"])
+        self.assertEqual(self.text(), text)
+        # 文字でない reason は 400
+        self.assertEqual(self.action("/api/task-waiting", {"task": "2026-11-20-a", "waiting": True, "reason": 5,
+                                                           "mtime": stamp[0], "size": stamp[1]}).status, 400)
 
     def test_task_stage_and_waiting(self):
         stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))
