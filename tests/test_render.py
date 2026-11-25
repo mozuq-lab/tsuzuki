@@ -57,6 +57,19 @@ class RenderTest(unittest.TestCase):
         self.assertIn("<ul><li>上<ul><li>下</li></ul></li><li>次</li></ul>", html)
         self.assertOnlyKnownMarkup(html)
 
+    def test_breaks_keep_single_newlines(self):
+        self.assertEqual(render_markdown("一行目\n二行目", breaks=True), "<p>一行目<br>\n二行目</p>")
+        self.assertIn("<li>a<br>\nb</li>", render_markdown("- a\n  b\n- c", breaks=True))
+        self.assertIn("<blockquote>\n<p>a<br>\nb</p>\n</blockquote>", render_markdown("> a\n> b", breaks=True))
+        code = render_markdown("```\nx\ny\n```", breaks=True)
+        self.assertNotIn("<br>", code)
+        self.assertIn("<pre><code>x\ny</code></pre>", code)
+
+    def test_breaks_off_is_unchanged(self):
+        text = "a\nb\n\n- c\n  d\n\n> e\n> f"
+        self.assertEqual(render_markdown(text), render_markdown(text, breaks=False))
+        self.assertNotIn("<br>", render_markdown(text))
+
     def test_markdown_paragraphs_keep_newlines(self):
         self.assertEqual(render_markdown("一行目\n二行目\n\n次の段落"), "<p>一行目\n二行目</p>\n<p>次の段落</p>")
         # 見出しの閉じの # は外し、語の一部の # は残す

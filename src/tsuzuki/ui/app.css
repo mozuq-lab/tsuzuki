@@ -494,6 +494,14 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 .md h2 { margin: .8rem 0 .3rem; font-size: 14px; }
 .md h3, .md h4, .md h5, .md h6 { margin: .7rem 0 .25rem; font-size: 13px; }
 .md p, .md li { margin: .2rem 0; }
+/* 会話の発言は、発言の枠（.turn .b）の中に出すので、資料の .md の枠は付けない */
+.turn .b.md { margin: 0; }
+.turn.u .b.md { border: 0; }
+.turn .b.md > :first-child { margin-top: 0; }
+.turn .b.md > :last-child { margin-bottom: 0; }
+.conv .turn .md p, .conv .turn .md li { margin: .1rem 0; }
+.conv .turn .md h1, .conv .turn .md h2, .conv .turn .md h3 { margin: .4rem 0 .2rem; }
+.conv .turn .md pre, .conv .turn .md table, .conv .turn .md blockquote { margin: .25rem 0; }
 .md ul, .md ol { margin: .2rem 0; padding-left: 1.4rem; }
 .md table { margin: .4rem 0; border-collapse: collapse; font-size: 12px; }
 .md th, .md td { padding: .2rem .55rem; border: 1px solid var(--border); }

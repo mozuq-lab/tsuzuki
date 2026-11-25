@@ -919,8 +919,8 @@ class UiRenderTest(SafeMarkup, Ledger):
         self.assertIn('<div class="turn u" id="turn-1">', html)
         self.assertIn('<div class="turn u" id="turn-2">', html)
         self.assertEqual(html.count('id="turn-'), 2)
-        # Markdown にせず、文字のまま（改行だけ <br>）
-        self.assertIn("<mark>引き継ぎ</mark>資料を<br>作って **太字** &lt;b&gt;", html)
+        # 発言は Markdown（1つの改行は <br>）
+        self.assertIn("<mark>引き継ぎ</mark>資料を<br>\n作って <strong>太字</strong> &lt;b&gt;", html)
         self.assertIn('<details class="tools" open><summary>ツール5回：Bash（確認） ／ Write docs/h.md ／ Bash（検査）'
                       '</summary>', html)
         self.assertIn("<li>Write <mark>引き継ぎ</mark>.md</li>", html)
@@ -940,6 +940,29 @@ class UiRenderTest(SafeMarkup, Ledger):
         w = ConversationWindow(S9, [ConvItem("user", t(0), "課題", 0, []), ConvItem("user", t(1), "続き", 0, [])],
                                0, 0, 0, "transcript")
         self.assertEqual(frag_conversation(w, title="課題", terms=[], hit_turns=[]).count('id="turn-0"'), 1)
+
+    def test_conversation_is_markdown(self):
+        items = [ConvItem("user", t(0), "1行目\n2行目", 1, []),
+                 ConvItem("assistant", t(1), "**太字**\n\n- a\n- b\n\n```py\nx = 1\n```", 1, [])]
+        html = frag_conversation(ConversationWindow(S1, items, 0, 1, 1, "ledger"), title="x", terms=[], hit_turns=[])
+        self.assertIn('<div class="b md"><p>1行目<br>\n2行目</p></div>', html)
+        for part in ("<strong>太字</strong>", "<li>a</li>", "<pre><code>x = 1</code></pre>"):
+            self.assertIn(part, html)
+
+    def test_conversation_markdown_escapes_html(self):
+        items = [ConvItem("user", t(0), EVIL, 1, []), ConvItem("assistant", t(1), "- " + EVIL + "\n\n> " + EVIL, 1, [])]
+        html = frag_conversation(ConversationWindow(S1, items, 0, 1, 1, "ledger"), title="x", terms=[], hit_turns=[])
+        m = self.assertSafe(html)
+        self.assertIn(EVIL, m.text)
+
+    def test_conversation_marks_terms_in_markdown(self):
+        text = "**赤い旗**\n\n```mermaid\ngraph TD\n赤い旗-->B\n```"
+        items = [ConvItem("assistant", t(1), text, 1, [])]
+        html = frag_conversation(ConversationWindow(S1, items, 0, 1, 1, "ledger"), title="x", terms=["赤い"],
+                                 hit_turns=[1])
+        self.assertIn("<strong><mark>赤い</mark>旗</strong>", html)
+        self.assertIn("<pre class=\"mermaid-src\"><code>graph TD\n赤い旗--&gt;B</code></pre>", html)
+        self.assertEqual(html.count("<mark>"), 1)
 
     def test_conversation_offers_add_to_task(self):
         # 会話の画面の見出しにも「タスクに足す」を置く。足せるタスクがなければ出さない

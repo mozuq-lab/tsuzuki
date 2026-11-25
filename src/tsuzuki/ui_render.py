@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Optional, Pattern, Sequence, Set, Tuple
 
 from tsuzuki import views
 from tsuzuki.documents import KIND_LABELS
-from tsuzuki.render import fmt_local, highlight, render_plain
+from tsuzuki.render import fmt_local, highlight, render_markdown, render_plain
 from tsuzuki.retention import iso_utc
 from tsuzuki.search import DocHit, SearchResult, SessionHit, Snippet
 from tsuzuki.sources.live import LiveSession
@@ -471,7 +471,7 @@ def frag_doc(d: DocumentDetail, *, terms: Sequence[str] = ()) -> str:
 
 def frag_conversation(w: ConversationWindow, *, title: str, terms: List[str], hit_turns: Sequence[int],
                       task_choices: Sequence[Tuple[str, str]] = ()) -> str:
-    """会話。発言は Markdown にせず文字のまま出し、検索の語に印を付ける。続けて呼んだツールは畳む。
+    """会話。発言は Markdown として出し（改行はそのまま <br> にする）、検索の語に印を付ける。続けて呼んだツールは畳む。
     長い会話は窓（views.conversation_window）で出し、前後に残りがあれば読み足すボタンを付ける。
     見出しには、題の下に「タスクに足す」を置く（task_choices があれば）。"""
     turns = [int(n) for n in hit_turns]
@@ -529,8 +529,9 @@ def _conversation_items(w: ConversationWindow, terms: Sequence[str]) -> str:
             if anchors and item.kind == "user" and item.turn not in anchored:
                 anchored.add(item.turn)
                 pairs.append(("id", "turn-%d" % item.turn))
-            out.append('<div%s><div class="who">%s</div><div class="b">%s</div></div>' % (
-                _attrs(*pairs), _join([WHO[item.kind], _e(fmt_local(item.ts))]), _marked_text(item.text, terms)))
+            out.append('<div%s><div class="who">%s</div><div class="b md">%s</div></div>' % (
+                _attrs(*pairs), _join([WHO[item.kind], _e(fmt_local(item.ts))]),
+                _mark_html(render_markdown(item.text, breaks=True), terms)))
     return "".join(out)
 
 

@@ -609,12 +609,20 @@ class MermaidAssetsTest(unittest.TestCase):
         from tsuzuki.server import MERMAID_FRAME_URL
         self.assertIn('const MERMAID_URL = "%s";' % MERMAID_FRAME_URL, js)
 
+    def test_conversation_diagrams_are_drawn_and_kept_when_reading_more(self):
+        js = _asset("app.js")
+        body = _function(js, "setupMermaid")
+        self.assertIn(".conv .md .mermaid-block", body)
+        self.assertIn('block.querySelector("iframe.mermaid-frame")', body)
+        self.assertNotIn("mermaidFrames = [];", body)
+        self.assertIn("setupMermaid();", _function(js, "readMore"))
+
     def test_client_isolates_the_frames_and_checks_the_replies(self):
         js = _asset("app.js")
         # 枠は scripts だけを許す隔離（同じ起源にはしない）。描くのは資料の画面の Markdown の図だけ
         self.assertIn('frame.setAttribute("sandbox", "allow-scripts")', js)
         self.assertNotIn("allow-same-origin", js)
-        self.assertIn('".doc-view .md .mermaid-block"', js)
+        self.assertIn('".doc-view .md .mermaid-block, .conv .md .mermaid-block"', js)
         # 返事は、自分の作った枠（contentWindow）からの、決まった形のものだけを受け取る
         receive = _function(js, "receiveMermaid")
         self.assertIn("event.source", receive)

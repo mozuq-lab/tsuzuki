@@ -729,6 +729,7 @@ async function readMore(button) {
   button.insertAdjacentHTML("beforebegin", text); // 断片はサーバーがエスケープ済み
   button.remove();
   if (anchor) ui.detail.scrollTop += anchor.getBoundingClientRect().top - top;
+  setupMermaid(); // 読み足した発言の図
   refreshMarks();
 }
 
@@ -748,6 +749,7 @@ function refreshMarks() {
 
 // 右のペインを入れ替えたあと：資料の Mermaid の図を描き始める。会話なら、目的のターンへ移り、一致の数を出す
 function setupDetail() {
+  mermaidFrames = []; // 前の表示の枠は、ペインを入れ替えたときに消えている
   setupMermaid();
   marks = [];
   markIndex = -1;
@@ -815,8 +817,8 @@ function setReading(on) {
 // 描けなければコードを出したまま、その下に失敗の文を1行添える。スクリプトが動かなければ、コードのまま読める
 
 function setupMermaid() {
-  mermaidFrames = []; // 前の資料の枠は、ペインを入れ替えたときに消えている
-  for (const block of ui.detail.querySelectorAll(".doc-view .md .mermaid-block")) {
+  for (const block of ui.detail.querySelectorAll(".doc-view .md .mermaid-block, .conv .md .mermaid-block")) {
+    if (block.querySelector("iframe.mermaid-frame")) continue; // 枠のある図（読み足しの前から出ていたもの）
     const source = block.querySelector(".mermaid-src code");
     const code = source ? source.textContent : "";
     if (!code.trim()) continue;

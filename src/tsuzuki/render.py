@@ -34,12 +34,13 @@ _PLACEHOLDER = re.compile("\x00([0-9]+)\x00")
 _SECONDS_FRACTION = re.compile(r"(:\d{2})\.\d+")
 
 
-def render_markdown(text: str) -> str:
+def render_markdown(text: str, *, breaks: bool = False) -> str:
     """Markdown の一部（見出し・段落・箇条書き・番号付きの箇条書き・囲みのコード・引用・横線・表と、
-    インラインのコード・太字・斜体・リンク）を HTML にする。言語が mermaid の囲みは mermaid-block の div にする。"""
+    インラインのコード・太字・斜体・リンク）を HTML にする。言語が mermaid の囲みは mermaid-block の div にする。
+    breaks なら、段落・項目の中の1つの改行を <br> にする（囲みのコードと表は変えない）。"""
     # NUL は _inline の印に使うので、入力の NUL は置換文字にしておく
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "\N{REPLACEMENT CHARACTER}")
-    return "\n".join(_blocks(html.escape(text).split("\n"), 0))
+    return "\n".join(_blocks(html.escape(text).split("\n"), 0, breaks))
 
 
 def render_plain(text: str) -> str:
@@ -95,7 +96,7 @@ def fmt_local(iso: Optional[str], *, now: Optional[datetime] = None) -> str:
 
 # ブロック（行ごとに見る。lines はエスケープ済み）
 
-def _blocks(lines: List[str], depth: int) -> List[str]:
+def _blocks(lines: List[str], depth: int, breaks: bool = False) -> List[str]:
     out = []  # type: List[str]
     i, n = 0, len(lines)
     while i < n:
@@ -125,7 +126,7 @@ def _blocks(lines: List[str], depth: int) -> List[str]:
                     break
                 inner.append(m.group(1))
                 i += 1
-            out.append("<blockquote>\n%s\n</blockquote>" % "\n".join(_blocks(inner, depth + 1)))
+            out.append("<blockquote>\n%s\n</blockquote>" % "\n".join(_blocks(inner, depth + 1, breaks)))
             continue
         aligns = _table_aligns(lines, i)
         if aligns is not None:
@@ -133,7 +134,7 @@ def _blocks(lines: List[str], depth: int) -> List[str]:
             out.append(block)
             continue
         if _ITEM.match(line):
-            block, i = _list(lines, i, depth)
+            block, i = _list(lines, i, depth, breaks)
             out.append(block)
             continue
         para = [line.strip()]
@@ -142,8 +143,13 @@ def _blocks(lines: List[str], depth: int) -> List[str]:
                and _table_aligns(lines, i) is None):
             para.append(lines[i].strip())
             i += 1
-        out.append("<p>%s</p>" % _inline("\n".join(para)))
+        out.append("<p>%s</p>" % _lines(_inline("\n".join(para)), breaks))
     return out
+
+
+def _lines(inline: str, breaks: bool) -> str:
+    """変換した行の中の改行（行の継ぎ目だけ。コードの中の改行は空白にしてある）を、breaks なら <br> 付きにする。"""
+    return inline.replace("\n", "<br>\n") if breaks else inline
 
 
 def _indent(line: str) -> int:
@@ -272,18 +278,18 @@ class _Item:
     def add_code(self, block: str) -> None:
         self.parts.append(("code", [block]))
 
-    def html(self) -> str:
+    def html(self, breaks: bool = False) -> str:
         out = []
         for kind, lines in self.parts:
             if kind == "code":
                 out.append(lines[0])
             else:
-                body = _inline("\n".join(lines))
+                body = _lines(_inline("\n".join(lines)), breaks)
                 out.append("<p>%s</p>" % body if self.loose else body)
         return "".join(out)
 
 
-def _list(lines: List[str], i: int, depth: int) -> Tuple[str, int]:
+def _list(lines: List[str], i: int, depth: int, breaks: bool = False) -> Tuple[str, int]:
     """箇条書き。最初の項目より2字以上深い項目を1段下の入れ子にする（2段まで）。"""
     base = _indent(_ITEM.match(lines[i]).group(1))
     items = []  # type: List[_Item]
@@ -312,7 +318,7 @@ def _list(lines: List[str], i: int, depth: int) -> Tuple[str, int]:
             items[-1].add_text(line.strip(), new_paragraph=blank)
             i += 1
         blank = False
-    return _render_list(items), i
+    return _render_list(items, breaks), i
 
 
 def _open_list(item: _Item) -> str:
@@ -321,7 +327,7 @@ def _open_list(item: _Item) -> str:
     return '<ol start="%d">' % item.start if item.start != 1 else "<ol>"
 
 
-def _render_list(items: List[_Item]) -> str:
+def _render_list(items: List[_Item], breaks: bool = False) -> str:
     out = []  # type: List[str]
     top = sub = None  # type: Optional[str]
     item_open = False
@@ -338,7 +344,7 @@ def _render_list(items: List[_Item]) -> str:
                     out.append("</%s>" % top)
                 out.append(_open_list(item))
                 top = tag
-            out.append("<li>" + item.html())
+            out.append("<li>" + item.html(breaks))
             item_open = True
         else:
             if sub != tag:
@@ -346,7 +352,7 @@ def _render_list(items: List[_Item]) -> str:
                     out.append("</%s>" % sub)
                 out.append(_open_list(item))
                 sub = tag
-            out.append("<li>%s</li>" % item.html())
+            out.append("<li>%s</li>" % item.html(breaks))
     if sub:
         out.append("</%s>" % sub)
     if item_open:
