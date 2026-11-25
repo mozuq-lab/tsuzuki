@@ -36,10 +36,11 @@ _LINK_SCHEMES = ("http://", "https://")
 # 左：状況・場所・共通の資料
 
 def frag_task_filters(counts: Dict[str, int], places: List[Tuple[Optional[int], str, int]], *, status: str,
-                      place: Optional[int], shared_place: Optional[int]) -> str:
+                      place: Optional[int], shared_place: Optional[int], ticket_url: Optional[str] = None) -> str:
     """状況（進行中と待ち・完了・すべて）、場所（「すべて」が最初。場所のないタスクは「場所なし」で、ID は
     NO_PLACE_ID）、共通の資料（押すと資料の画面を共通の資料の場所で絞って開く）。places の場所の ID が None なら
-    場所なし。place は選んでいる場所（None はすべて）。"""
+    場所なし。place は選んでいる場所（None はすべて）。最後に、チケットのリンク先（設定 ticket_url。None は
+    リポジトリの Issue）と、それを変える入力欄（初めは hidden）。"""
     out = ['<div class="ph">状況</div>']
     out += [_filter_row("data-status", value, label, _n(counts.get(key, 0)), key == status)
             for key, value, label in STATUS_FILTERS]
@@ -54,6 +55,15 @@ def frag_task_filters(counts: Dict[str, int], places: List[Tuple[Optional[int], 
     else:
         out.append('<div%s><span title="資料の画面で開く">%s</span></div>' % (
             _attrs(("class", "place"), ("data-action", "docs"), ("data-place", shared_place)), SHARED_DIR))
+    out.append('<div class="ph">チケットのリンク先</div>')
+    out.append('<div class="turl"><span>%s</span>%s</div>' % (
+        _e(ticket_url) if ticket_url else "リポジトリの Issue（GitHub）",
+        _button("変える", "btn", ("data-action", "ticket-url-edit"))))
+    out.append(
+        '<form id="ticket-url" class="ticket-url" autocomplete="off" hidden>'
+        '<input name="url"%s placeholder="https://redmine.example.com/issues" spellcheck="false" maxlength="500">'
+        '<div class="btns"><button type="submit" class="btn pri">保存</button>%s</div></form>' % (
+            _attrs(("value", ticket_url or "")), _button("やめる", "btn", ("data-action", "form-cancel"))))
     return "".join(out)
 
 

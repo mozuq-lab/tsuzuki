@@ -35,7 +35,7 @@ from typing import Any, BinaryIO, Callable, Dict, FrozenSet, Iterator, List, Opt
 from urllib.parse import parse_qs, unquote
 
 from tsuzuki import taskviews, ui_render, ui_tasks, views
-from tsuzuki.config import Config
+from tsuzuki.config import Config, ConfigError, normalize_ticket_url, write_ticket_url
 from tsuzuki.indexer import UpdateReport, update, update_lock
 from tsuzuki.resume import ActionOutcome, is_session_id, open_document, open_place, resume, start_conversation
 from tsuzuki.vscode_ext import VSCodeTerminal, requests_dir
@@ -117,6 +117,8 @@ STAGE_SET = "段階を「%s」にしました"
 WAITING_SET = {True: "待ちにしました", False: "待ちを解きました"}
 SETTINGS_SET = "設定を変えました"
 NO_SETTINGS_CHANGE = "変わった所はありません"
+TICKET_URL_SET = "チケットのリンク先を変えました"
+TICKET_URL_RESET = "チケットのリンク先を、リポジトリの Issue に戻しました"
 LINK_SET = {"add": "タスクに足しました", "remove": "タスクから外しました"}
 TASK_STATUSES = ("open", "done", "all")  # 一覧と左の状況の絞り込み（空は open）
 # http.server が自分で返す誤り（壊れた要求、知らない方法など）の文
@@ -723,7 +725,7 @@ def _frag_task_filters(app: App, conn: sqlite3.Connection, _: None, p: _Params) 
         if label is not None:
             places.append((None if place == ui_tasks.NO_PLACE_ID else place, label, 0))
     return ui_tasks.frag_task_filters(counts, places, status=status, place=place,
-                                      shared_place=_shared_place(app, conn))
+                                      shared_place=_shared_place(app, conn), ticket_url=app.cfg.ticket_url)
 
 
 def _frag_tasks(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:
@@ -960,6 +962,20 @@ def _api_task_settings(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     return answer
 
 
+def _api_ticket_url(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """チケットのリンク先（設定 ticket_url）を config.json に書き、動いている設定（app.cfg）も変える。
+    空ならリポジトリの Issue に戻す。"""
+    text = _task_text(data, "url")
+    with app.lock:  # 続けて押されても、読んで書く間に別の保存が入らないようにする
+        try:
+            value = normalize_ticket_url(text)
+            write_ticket_url(app.ledger_dir, value)
+        except ConfigError as e:
+            return _task_failed(str(e))
+        app.cfg.ticket_url = value
+    return _task_done(TICKET_URL_SET if value is not None else TICKET_URL_RESET)
+
+
 def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """利用者がセッションをタスクに足す（add）・タスクから外す（remove）。記録は作り直しでも消えない（tasklinks）。"""
     task, session_id, action = _task_text(data, "task"), _task_text(data, "session_id"), _task_text(data, "action")
@@ -1097,7 +1113,7 @@ def _finite(value: float) -> bool:
 _ACTIONS = {"/api/resume": _api_resume, "/api/open": _api_open, "/api/open-place": _api_open_place,
             "/api/reindex": _api_reindex, "/api/task-new": _api_task_new, "/api/task-stage": _api_task_stage,
             "/api/task-waiting": _api_task_waiting, "/api/task-settings": _api_task_settings,
-            "/api/task-link": _api_task_link,
+            "/api/task-link": _api_task_link, "/api/ticket-url": _api_ticket_url,
             "/api/task-conversation": _api_task_conversation, "/api/task-trash": _api_task_trash,
             }  # type: Dict[str, Callable[[App, Dict[str, Any]], Dict[str, Any]]]
 

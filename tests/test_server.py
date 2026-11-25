@@ -19,9 +19,9 @@ from unittest import mock
 from urllib.parse import quote
 
 from tsuzuki import cli, documents, indexer, server
-from tsuzuki.config import Config
+from tsuzuki.config import Config, read_config
 from tsuzuki.indexer import update
-from tsuzuki.server import COOKIE, TOKEN_FILE, make_server, serve
+from tsuzuki.server import COOKIE, TICKET_URL_RESET, TOKEN_FILE, make_server, serve
 from tsuzuki.tasks import parse_task_md
 from tsuzuki.taskwrite import CHANGED, TaskWriteError
 from tests.fixtures import FakeClaude, assistant, make_git_repo, make_ledger, sid, t, tool_result, user, write_file
@@ -1037,6 +1037,22 @@ class TaskServerTest(ServerCase):
         self.assertEqual(self.get("/frag/task/" + quote("2026-11-22-ログイン"), cookie=True).status, 200)
         for bad in ("nope", "..%2F..%2Fetc", "shared"):
             self.assertEqual(self.get("/frag/task/" + bad, cookie=True).status, 404)
+
+    def test_ticket_url_from_the_screen(self):
+        r = self.action("/api/ticket-url", {"url": "https://redmine.example.com/issues"}).json()
+        self.assertEqual((r["ok"], r["message"]), (True, "チケットのリンク先を変えました"))
+        self.assertEqual(self.app.cfg.ticket_url, "https://redmine.example.com/issues/{n}")
+        self.assertEqual(read_config(self.ledger).ticket_url, "https://redmine.example.com/issues/{n}")
+        card = self.frag("/frag/task/2026-11-20-a")
+        self.assertIn('href="https://redmine.example.com/issues/123"', card)
+        self.assertIn("https://redmine.example.com/issues/{n}", self.frag("/frag/task-filters"))
+        bad = self.action("/api/ticket-url", {"url": "redmine.example.com"}).json()
+        self.assertFalse(bad["ok"])
+        self.assertEqual(self.app.cfg.ticket_url, "https://redmine.example.com/issues/{n}")
+        r = self.action("/api/ticket-url", {"url": ""}).json()
+        self.assertEqual((r["ok"], r["message"]), (True, TICKET_URL_RESET))
+        self.assertIsNone(self.app.cfg.ticket_url)
+        self.assertIsNone(read_config(self.ledger).ticket_url)
 
     def test_task_stage_post(self):
         body = {"task": "2026-11-20-a", "stage": "PR"}

@@ -191,7 +191,7 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         places = [(3, "web-app", 2), (5, "billing-api", 1), (None, "場所なし", 1)]
         html = frag_task_filters(counts, places, status="open", place=None, shared_place=7)
         self.assertSafe(html)
-        self.assertEqual(re.findall(r'<div class="ph">([^<]*)</div>', html), ["状況", "場所", "共通の資料"])
+        self.assertEqual(re.findall(r'<div class="ph">([^<]*)</div>', html), ["状況", "場所", "共通の資料", "チケットのリンク先"])
         self.assertIn('<div class="place on" data-status=""><span>進行中と待ち</span><em>4</em></div>', html)
         self.assertIn('<div class="place" data-status="done"><span>完了</span><em>12</em></div>', html)
         self.assertIn('<div class="place" data-status="all"><span>すべて</span><em>16</em></div>', html)
@@ -211,6 +211,30 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         none = frag_task_filters(counts, [], status="open", place=None, shared_place=None)
         self.assertEqual(Markup(none).tags_with("data-action", "docs"), [])
         self.assertIn("shared/ はまだありません", none)
+
+    def test_ticket_url_section(self):
+        counts = {"open": 1, "done": 0, "all": 1}
+        for value in (None, EVIL):
+            with self.subTest(value):
+                html = frag_task_filters(counts, [], status="open", place=None, shared_place=None, ticket_url=value)
+                m = self.assertSafe(html)
+                self.assertNotIn(EVIL, html)
+                edit = m.tags_with("data-action", "ticket-url-edit")
+                self.assertEqual(len(edit), 1)
+                form = m.tags_with("id", "ticket-url")
+                self.assertEqual(len(form), 1)
+                self.assertEqual(form[0][0], "form")
+                self.assertIn("hidden", form[0][1])
+                self.assertEqual(len(m.tags_with("data-action", "form-cancel")), 1)
+                field = m.tags_with("name", "url")
+                self.assertEqual(len(field), 1)
+                self.assertEqual(field[0][1]["placeholder"], "https://redmine.example.com/issues")
+        none = frag_task_filters(counts, [], status="open", place=None, shared_place=None)
+        self.assertIn("リポジトリの Issue（GitHub）", none)
+        self.assertEqual(Markup(none).tags_with("name", "url")[0][1].get("value", ""), "")
+        shown = frag_task_filters(counts, [], status="open", place=None, shared_place=None, ticket_url=EVIL)
+        self.assertNotIn("リポジトリの Issue（GitHub）", shown)
+        self.assertEqual(Markup(shown).tags_with("name", "url")[0][1]["value"], EVIL)
 
     # 中央：一覧
 

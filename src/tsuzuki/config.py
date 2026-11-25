@@ -130,6 +130,51 @@ def read_config(ledger: Path) -> Config:
     return cfg
 
 
+BAD_TICKET_URL = "チケットのリンク先は http:// か https:// で始まる URL にしてください"
+
+
+def normalize_ticket_url(value: str) -> Optional[str]:
+    """画面で入れたチケットのリンク先を、設定 ticket_url の値にする。空なら None（リポジトリの Issue に戻す）。
+    {n} がなければ、末尾に /{n} を足す。"""
+    value = value.strip()
+    if not value:
+        return None
+    if any(ch.isspace() or not ch.isprintable() for ch in value) or not value.startswith(("http://", "https://")):
+        raise ConfigError(BAD_TICKET_URL)
+    return value if "{n}" in value else value.rstrip("/") + "/{n}"
+
+
+def write_ticket_url(ledger: Path, value: Optional[str]) -> None:
+    """config.json の ticket_url だけを書き換える（ほかの項目と知らない項目はそのまま）。読めない・正しくない
+    ときは ConfigError で、書かない。同じフォルダーの一時ファイルに書いてから置き換え、元の権限を保つ。"""
+    path = ledger / "config.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ConfigError("config.json を読めません: %s" % e)
+        if not isinstance(data, dict):
+            raise ConfigError("config.json の最上位はオブジェクトにしてください")
+        mode = os.stat(str(path)).st_mode & 0o777
+    else:
+        data, mode = _to_dict(Config()), 0o600
+    data["ticket_url"] = value
+    _validate(_from_dict(dict(data)))
+    tmp = ledger / "config.json.tmp"
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        os.chmod(str(tmp), mode)
+        os.replace(str(tmp), str(path))
+    except OSError as e:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise ConfigError("config.json に書けません: %s" % e)
+
+
 def load_config(ledger: Path) -> Config:
     ledger.mkdir(parents=True, exist_ok=True)
     os.chmod(str(ledger), 0o700)

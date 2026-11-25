@@ -24,7 +24,7 @@ MAKE_DEMO = ROOT / "scripts" / "make_demo.py"
 # 断片の data-action（タスクの操作を含む）。app.js はすべてを受け持つ
 ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans", "open-doc", "open-place", "docs",
            "fold", "read-more", "task-stage", "task-waiting", "task-settings", "copy-picked", "task-unlink", "task-conversation",
-           "new-task", "task-open", "task-link", "task-trash", "form-cancel"}
+           "new-task", "task-open", "task-link", "task-trash", "form-cancel", "ticket-url-edit"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
 HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く
@@ -172,7 +172,7 @@ class UiAssetsTest(unittest.TestCase):
         self.assertEqual(json.loads(keys.group(1)), HASH_KEYS)
         for part in ("history.pushState", "history.replaceState", "hashchange", "popstate", "application/json",
                      "navigator.clipboard.writeText", "/api/status", "/api/reindex", "/api/resume", "/api/open",
-                     "/api/open-place", "location.reload()"):
+                     "/api/open-place", "/api/ticket-url", "location.reload()"):
             self.assertIn(part, js)
         # 見た目は class と hidden で切り替える（style 属性は CSP で止まる）
         self.assertNotIn(".style", js)

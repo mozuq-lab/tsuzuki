@@ -12,14 +12,61 @@ from tsuzuki.config import (
     Config,
     ConfigError,
     load_config,
+    normalize_ticket_url,
     read_config,
     resolve_claude_dir,
     resolve_port,
     resolve_tasks_root,
+    write_ticket_url,
 )
 
 
 class ConfigTest(unittest.TestCase):
+    def test_normalize_ticket_url(self):
+        want = "https://redmine.example.com/issues/{n}"
+        self.assertEqual(normalize_ticket_url("https://redmine.example.com/issues"), want)
+        self.assertEqual(normalize_ticket_url(" https://redmine.example.com/issues/ "), want)
+        self.assertEqual(normalize_ticket_url("https://x/{n}/show"), "https://x/{n}/show")
+        self.assertIsNone(normalize_ticket_url(""))
+        self.assertIsNone(normalize_ticket_url("  "))
+        for bad in ("redmine.example.com", "javascript:alert(1)", "https://a b", "https://a\u2028b", "https://a\x00b"):
+            with self.subTest(bad), self.assertRaises(ConfigError):
+                normalize_ticket_url(bad)
+
+    def test_write_ticket_url_keeps_other_settings(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+            path.write_text(json.dumps({"port": 9000, "extra": 1}), encoding="utf-8")
+            os.chmod(str(path), 0o640)
+            write_ticket_url(Path(d), "https://r.example.com/issues/{n}")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual((data["port"], data["extra"], data["ticket_url"]), (9000, 1, "https://r.example.com/issues/{n}"))
+            self.assertEqual(read_config(Path(d)).ticket_url, "https://r.example.com/issues/{n}")
+            self.assertEqual(stat.S_IMODE(os.stat(str(path)).st_mode), 0o640)
+            write_ticket_url(Path(d), None)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIsNone(data["ticket_url"])
+            self.assertEqual((data["port"], data["extra"]), (9000, 1))
+            self.assertEqual(sorted(os.listdir(d)), ["config.json"])
+
+    def test_write_ticket_url_creates_a_private_file_when_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_ticket_url(Path(d), "https://r.example.com/issues/{n}")
+            self.assertEqual(stat.S_IMODE(os.stat(str(Path(d) / "config.json")).st_mode), 0o600)
+            self.assertEqual(read_config(Path(d)).ticket_url, "https://r.example.com/issues/{n}")
+
+    def test_write_ticket_url_refuses_a_broken_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.json"
+            path.write_text("{broken", encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                write_ticket_url(Path(d), "https://r.example.com/issues/{n}")
+            self.assertEqual(path.read_text(encoding="utf-8"), "{broken")
+            path.write_text("[1]", encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                write_ticket_url(Path(d), None)
+            self.assertEqual(path.read_text(encoding="utf-8"), "[1]")
+
     def test_resume_default_values(self):
         for value in ("vscode", "vscode-terminal", "terminal", "copy"):
             with self.subTest(value), tempfile.TemporaryDirectory() as d:

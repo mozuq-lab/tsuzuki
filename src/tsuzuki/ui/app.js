@@ -493,6 +493,7 @@ const ACTIONS = {
   "task-waiting": (button) => openWaitingForm(button),
   "task-settings": (button) => openSettings(button),
   "form-cancel": (button) => cancelForm(button),
+  "ticket-url-edit": () => openTicketUrl(),
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
   "task-trash": (button) => trashTask(button),
@@ -1001,6 +1002,35 @@ async function saveSettings(form) {
   await reloadTasks();
 }
 
+// 左の「チケットのリンク先」の「変える」：入力欄を出して、入力に移る
+function openTicketUrl() {
+  const form = document.getElementById("ticket-url");
+  if (!form) return;
+  form.hidden = false;
+  const input = form.querySelector('[name="url"]');
+  if (input) input.focus();
+}
+
+// チケットのリンク先の「保存」：書けたら左とカードを取り直す（リンクが新しい型で出る）。空にすると元に戻る
+async function saveTicketUrl(form) {
+  if (busyWriting()) return;
+  const submit = form.querySelector('[type="submit"]');
+  writing = true;
+  if (submit) submit.disabled = true;
+  let answer;
+  try {
+    answer = await postWrite("/api/ticket-url", { url: String(new FormData(form).get("url") || "") });
+  } finally {
+    writing = false;
+    if (submit) submit.disabled = false;
+  }
+  if (!answer) return;
+  toast(answer.message);
+  if (!answer.ok) return;
+  panes.left.url = null; // 同じ URL でも取り直す
+  await reloadTasks();
+}
+
 // 入力欄の「やめる」：設定の欄（#task-settings）は、カードを取り直して元に戻す。ほかの欄は閉じる
 function cancelForm(button) {
   const form = button.closest("form");
@@ -1141,6 +1171,9 @@ function onSubmit(event) {
   } else if (form.id === "task-settings") {
     event.preventDefault();
     saveSettings(form);
+  } else if (form.id === "ticket-url") {
+    event.preventDefault();
+    saveTicketUrl(form);
   }
 }
 

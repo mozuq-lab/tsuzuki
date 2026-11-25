@@ -576,6 +576,24 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 }
 .waiting-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .waiting-form .btns { justify-content: flex-start; margin-top: .4rem; }
+/* 左の「チケットのリンク先」：今の値と「変える」、入力欄（初めは hidden） */
+.turl { display: flex; align-items: center; gap: .5rem; padding: .2rem .9rem; font-size: 12px; }
+.turl span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ticket-url { padding: .2rem .9rem .6rem; }
+.ticket-url[hidden] { display: none; }
+.ticket-url input {
+  display: block;
+  width: 100%;
+  padding: .3rem .5rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+.ticket-url input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ticket-url .btns { justify-content: flex-start; margin-top: .4rem; }
 /* 現在地と次の一手の枠（確認の #confirm .box とは別） */
 .task-card .box {
   margin: .6rem 0;

@@ -39,7 +39,7 @@ Claude Code は既定では30日たった記録を消します（設定 `cleanup
 
 | 書く物 | 中身 |
 |---|---|
-| `config.json` | 設定。初回の `tsuzuki serve` か `tsuzuki index` が、既定値を書いて作ります |
+| `config.json` | 設定。初回の `tsuzuki serve` か `tsuzuki index` が、既定値を書いて作ります。タスクの画面の「チケットのリンク先」を保存すると、`ticket_url` だけを書き換えます（ほかの項目はそのまま） |
 | `ledger.db` | 台帳（権限 0600）。`ledger.db-wal` と `ledger.db-shm` も一緒にできます |
 | `token` | 画面を開くための鍵（権限 0600） |
 | `lineage.jsonl` | フックが書く、親のセッションの記録。フックを入れたときだけできます |
@@ -263,7 +263,7 @@ tsuzuki vscode install
 | `doc_scan` | 下の表のとおり | 場所の中から資料を探す走査 |
 | `headless_in_list` | `false` | 画面の「ヘッドレスも並べる」を、初めから入れておくか |
 | `tasks_root` | `"~/tasks"` | タスクの置き場所 |
-| `ticket_url` | `null` | チケットの URL の型。`{n}` が番号に替わります（例: `"https://github.com/org/repo/issues/{n}"`）。`null` なら、タスクのリポジトリの `.git/config` にある `origin` から、GitHub の課題の URL（`https://<ホスト>/<owner>/<repo>/issues/<番号>`）を作ります。作れないときは番号だけを出します |
+| `ticket_url` | `null` | チケットの URL の型。`{n}` が番号に替わります（例: `"https://github.com/org/repo/issues/{n}"`）。`null` なら、タスクのリポジトリの `.git/config` にある `origin` から、GitHub の課題の URL（`https://<ホスト>/<owner>/<repo>/issues/<番号>`）を作ります。作れないときは番号だけを出します。タスクの画面の左の「チケットのリンク先」から変えられます（例: Redmine なら `https://redmine.example.com/issues` と入れると、`https://redmine.example.com/issues/{n}` になります）。空にすると `null` に戻ります |
 | `new_conversation_prompt` | `"@{task_md} を読んで、次の一手から進めてください。"` | 「新しい会話」の最初の依頼。`@{task_md}` は `@<task.md の絶対パス>` に替わり、空白を含むパスなら `@"…"` で囲みます。`@` のない `{task_md}` は、絶対パスだけに替わります |
 | `default_branches` | `["main", "master", "develop"]` | セッションのブランチがこれらのときは、「同じブランチ」を根拠にタスクへ結び付けません |
 
@@ -475,7 +475,7 @@ Tsuzuki が `~/tasks` に書くのは、新しいタスクのフォルダーと 
 
 ### 設定
 
-タスクの設定は、`~/.tsuzuki/config.json` の `tasks_root`、`ticket_url`、`new_conversation_prompt`、`default_branches` です。意味は「設定」の表にあります。`ticket_url` を決めると、カードのチケットが、その URL へのリンクになります。決めなければ、タスクのリポジトリの `origin` から GitHub の課題へのリンクを作ります。たとえば `origin` が `git@github.com:org/repo.git` でチケットが `#123` なら、`https://github.com/org/repo/issues/123` を開きます。
+タスクの設定は、`~/.tsuzuki/config.json` の `tasks_root`、`ticket_url`、`new_conversation_prompt`、`default_branches` です。意味は「設定」の表にあります。`ticket_url` を決めると、カードのチケットが、その URL へのリンクになります。画面の左の「チケットのリンク先」から決められます（Redmine なら `https://redmine.example.com/issues` のように、`{n}` の前までを入れます）。決めなければ、タスクのリポジトリの `origin` から GitHub の課題へのリンクを作ります。たとえば `origin` が `git@github.com:org/repo.git` でチケットが `#123` なら、`https://github.com/org/repo/issues/123` を開きます。
 
 ### 制約
 
