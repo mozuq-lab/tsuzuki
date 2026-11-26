@@ -240,14 +240,76 @@ class TaskViewsTest(unittest.TestCase):
             self.add_doc_link("s1", "/r/docs/api.md", "read")
             self.add_doc_link("s2", "/r/docs/other.md", "read")
             d_ = self.detail("a")
-        self.assertEqual([f.rel_path for f in d_.folder_files], ["task.md", "research-a.md", "shot.png"])
-        self.assertEqual([f.kind_label for f in d_.folder_files], ["表紙", "調査", "その他"])
+        self.assertEqual([f.rel_path for f in d_.folder_files], ["task.md", "research-a.md"])
+        self.assertEqual([f.kind_label for f in d_.folder_files], ["表紙", "調査"])
+        self.assertEqual([f.rel_path for f in d_.work_files], ["shot.png"])
+        self.assertEqual(d_.folder_files[1].size, 1)
         self.assertEqual((d_.folder_files[1].title, d_.folder_files[1].excerpt), ("調査の題", "冒頭の段落です。 続き"))
         self.assertEqual([f.path for f in d_.shared_docs], [self.root + "/shared/notes-team.md"])
         self.assertEqual([(f.path, f.missing) for f in d_.other_docs], [("/r/docs/api.md", False),
                                                                         ("/r/missing.md", True)])
         self.assertEqual(d_.other_docs[0].relation, "読んだ")
+        self.assertEqual((d_.other_docs[0].size, d_.other_docs[0].mtime), (None, None))  # ディスクにない
         self.assertEqual(sorted(s.confidence for s in d_.sessions), ["confirmed", "weak"])
+
+    def test_folder_files_split_into_documents_and_work_files(self):
+        with allow_system_tmp():
+            d = self.add_task("a")
+            os.makedirs(d + "/sql")
+            docs = ["task.md", "research-a.md", "memo.md", "仕様書.pdf", "research-data.csv", "plan.md"]
+            work = ["check.sql", "research-queries.sql", "Makefile", "result.csv", "run.txt", "sql/seed users.sql"]
+            for name in docs + work:
+                Path(d, name).write_text("x")
+            self.add_doc(d + "/task.md", "cover", "表紙の題")
+            d_ = self.detail("a")
+        self.assertEqual(sorted(f.rel_path for f in d_.folder_files), sorted(docs))
+        self.assertEqual(sorted(f.rel_path for f in d_.work_files), sorted(work))
+        self.assertEqual(d_.work_total, 6)
+        sql = next(f for f in d_.work_files if f.rel_path == "check.sql")
+        self.assertEqual((sql.ext, sql.size), (".sql", 1))
+        self.assertEqual(next(f for f in d_.work_files if f.rel_path == "Makefile").ext, "")
+
+    def test_work_files_group_by_folder_newest_first(self):
+        with allow_system_tmp():
+            d = self.add_task("a")
+            for rel, when in (("b.sql", 100), ("a.sql", 200), ("out/x.json", 300), ("sql/y.sql", 50),
+                              ("out/z.json", 10)):
+                os.makedirs(os.path.dirname(os.path.join(d, rel)), exist_ok=True)
+                Path(d, rel).write_text("x")
+                os.utime(os.path.join(d, rel), (when, when))
+            d_ = self.detail("a")
+        self.assertEqual([f.rel_path for f in d_.work_files], ["a.sql", "b.sql", "out/x.json", "out/z.json", "sql/y.sql"])
+        self.assertEqual(d_.work_files[0].mtime, 200.0)
+
+    def test_many_work_files_never_hide_documents(self):
+        with allow_system_tmp():
+            d = self.add_task("a")
+            os.makedirs(d + "/a-out")
+            for i in range(320):
+                path = os.path.join(d, "a-out", "r%03d.json" % i)
+                Path(path).write_text("x")
+                os.utime(path, (i, i))
+            for name in ("task.md", "research-z.md"):
+                Path(d, name).write_text("x")
+            kw = dict(live={}, home=HOME, exclude_dirs=[], ticket_template=None)
+            d_ = task_detail(self.conn, "a", max_files=400, **kw)
+            cut = task_detail(self.conn, "a", max_files=100, **kw)
+        self.assertEqual(sorted(f.rel_path for f in d_.folder_files), ["research-z.md", "task.md"])
+        self.assertEqual((len(d_.work_files), d_.work_total, d_.folder_cut), (300, 320, False))
+        self.assertEqual(d_.work_files[0].rel_path, "a-out/r319.json")
+        self.assertTrue(cut.folder_cut)
+
+    def test_work_files_written_by_task_conversations_say_wrote(self):
+        with allow_system_tmp():
+            d = self.add_task("a")
+            for name in ("check.sql", "other.sql"):
+                Path(d, name).write_text("x")
+            self.link("a", "s1", "cwd", "confirmed")
+            self.link("a", "s2", "ticket", "weak")
+            self.add_doc_link("s1", d + "/check.sql", "task_file")
+            self.add_doc_link("s2", d + "/other.sql", "task_file")
+            found = {f.rel_path: f.relation for f in self.detail("a").work_files}
+        self.assertEqual(found, {"check.sql": "書いた", "other.sql": None})
 
     def test_other_docs_know_when_they_were_copied(self):
         with allow_system_tmp():

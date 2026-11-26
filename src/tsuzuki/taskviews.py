@@ -10,17 +10,19 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
 from tsuzuki import tasks as T
-from tsuzuki.documents import KIND_LABELS
+from tsuzuki.config import DEFAULT_DOC_EXTENSIONS
+from tsuzuki.documents import KIND_LABELS, classify_kind
 from tsuzuki.sources.live import LiveSession
 from tsuzuki.tasklinks import CONFIDENCE_LABELS, RULE_LABELS
 from tsuzuki.views import SessionRow, place_labels, session_rows
 
 STATUS_LABELS = {"active": "進行中", "waiting": "待ち", "done": "完了"}
-TASK_FILES_LIMIT = 300
+WORK_FILES_LIMIT = 300  # カードに並べる作業用のファイルの数（新しい順）
+WORK_DOC_EXTS = (".csv", ".txt")  # 資料の拡張子でも、種類が「その他」なら作業用のファイルにする拡張子
 DOC_BUNDLE_LIMIT = 50  # カードの共通の資料とほかの場所の資料に、それぞれ新しい順に並べる数
 EXCERPT_CHARS = 80
 # task.md の updated は分までなので、書いた分の終わり（＋60秒）までを「書く前」とみなす（引き継ぎの依頼を「その後」にしない）
@@ -28,8 +30,9 @@ UPDATED_PRECISION = 60.0
 NO_PLACE = "場所なし"
 _TRUSTED = ("confirmed", "strong")
 _KIND_ORDER = ("research", "design", "plan", "response", "notes")
-_REL_LABELS = {"created": "作った", "edited": "直した", "read": "読んだ", "named": "名指し"}
-_REL_RANK = {"created": 0, "edited": 1, "read": 2, "named": 3}
+# task_file は、タスクの置き場所の中の資料でないファイルへの書き込み（作ったか直したかは記録に残らない）
+_REL_LABELS = {"created": "作った", "edited": "直した", "read": "読んだ", "named": "名指し", "task_file": "書いた"}
+_REL_RANK = {"created": 0, "edited": 1, "read": 2, "named": 3, "task_file": 4}
 _PR_NUMBER = re.compile(r"/(\d+)/?$")
 _BULLET_PREFIX = re.compile(r"^[-*+]\s+")
 
@@ -65,6 +68,9 @@ class TaskFileItem:
     doc_id: Optional[int]
     missing: bool
     copied: bool = False  # ほかの場所の資料：タスクのフォルダーに同じ名前・同じ大きさのファイルがある
+    mtime: Optional[float] = None  # ファイルの更新時刻と大きさ（見つからなければ None）
+    size: Optional[int] = None
+    ext: str = ""  # 拡張子（小文字、ドット付き。なければ空）
 
 
 @dataclass
@@ -100,6 +106,8 @@ class TaskDetail:
     repo: Optional[str]
     shared_total: int = 0  # 共通の資料の全部の数（shared_docs は DOC_BUNDLE_LIMIT まで）
     other_total: int = 0  # ほかの場所の資料の全部の数（other_docs は DOC_BUNDLE_LIMIT まで）
+    work_files: List[TaskFileItem] = field(default_factory=list)  # 作業用のファイル（WORK_FILES_LIMIT まで）
+    work_total: int = 0  # 作業用のファイルの全部の数
 
 
 # 時刻
@@ -385,18 +393,33 @@ def _file_item(path: str, rel_path: str, doc: Optional[sqlite3.Row], kind: Optio
                missing: bool) -> TaskFileItem:
     kind = kind or (doc["kind"] if doc else None) or "other"
     title = (doc["title"] if doc else None) or os.path.basename(path)
+    try:
+        st = os.stat(path)
+        mtime, size = st.st_mtime, st.st_size  # type: Optional[float], Optional[int]
+    except OSError:
+        mtime, size = None, None
     return TaskFileItem(path=path, rel_path=rel_path, kind=kind, kind_label=KIND_LABELS.get(kind, kind),
                         title=title, excerpt=_excerpt(doc["body"]) if doc else "", relation=relation,
-                        doc_id=doc["id"] if doc else None, missing=missing)
+                        doc_id=doc["id"] if doc else None, missing=missing, mtime=mtime, size=size,
+                        ext=os.path.splitext(path)[1].lower())
+
+
+def is_work_file(path: str, kind: str, doc_extensions: Sequence[str]) -> bool:
+    """作業用のファイルか：拡張子が資料のものでないか、WORK_DOC_EXTS の拡張子で種類が「その他」のもの。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in [e.lower() for e in doc_extensions]:
+        return True
+    return ext in WORK_DOC_EXTS and kind == "other"
 
 
 def _doc_relations(conn: sqlite3.Connection, ids: Sequence[str]) -> Dict[str, Tuple[str, str]]:
-    """パスごとの（最も強い関わり、最も新しい時刻）。task_file は資料の関わりに数えない。"""
+    """パスごとの（最も強い関わり、最も新しい時刻）。task_file（資料でないファイルへの書き込み）は最も弱い。"""
     found: Dict[str, Tuple[str, str]] = {}
     for i in range(0, len(ids), 500):
         chunk = list(ids[i:i + 500])
         for path, rel, ts in conn.execute(
-                "SELECT path, rel, COALESCE(ts, '') FROM doc_links WHERE rel IN ('created', 'edited', 'named', 'read') "
+                "SELECT path, rel, COALESCE(ts, '') FROM doc_links "
+                "WHERE rel IN ('created', 'edited', 'named', 'read', 'task_file') "
                 "AND session_id IN (%s)" % ",".join("?" * len(chunk)), chunk):
             old = found.get(path)
             found[path] = (rel if old is None or _REL_RANK[rel] < _REL_RANK[old[0]] else old[0],
@@ -404,25 +427,39 @@ def _doc_relations(conn: sqlite3.Connection, ids: Sequence[str]) -> Dict[str, Tu
     return found
 
 
-def _folder_files(conn: sqlite3.Connection, task_dir: str, root: str, exclude_dirs: Sequence[str], max_depth: int,
-                  relations: Dict[str, Tuple[str, str]], named: Set[str]) -> Tuple[List[TaskFileItem], bool]:
-    paths, cut = T.list_task_files(task_dir, exclude_dirs=exclude_dirs, max_depth=max_depth,
-                                   max_files=TASK_FILES_LIMIT)
+class _FolderFiles(NamedTuple):
+    documents: List[TaskFileItem]  # 資料（表紙が最初、種類の順、新しい順）
+    work: List[TaskFileItem]  # 作業用のファイル（新しい順に WORK_FILES_LIMIT まで、フォルダーごと）
+    work_total: int
+    cut: bool  # フォルダーを読む上限で切った
+
+
+def _folder_files(conn: sqlite3.Connection, task_dir: str, root: str, home: str, exclude_dirs: Sequence[str],
+                  max_depth: int, max_files: int, doc_extensions: Sequence[str],
+                  relations: Dict[str, Tuple[str, str]], named: Set[str]) -> _FolderFiles:
+    """タスクのフォルダーのファイルを、資料と作業用のファイルに分ける。作業用のファイルが多くても資料を切らない
+    よう、フォルダーは max_files まで読み、並べる数の上限は作業用のファイルにだけ当てる。"""
+    paths, cut = T.list_task_files(task_dir, exclude_dirs=exclude_dirs, max_depth=max_depth, max_files=max_files)
     docs = _docs_by_path(conn, paths)
-    items: List[Tuple[Tuple, TaskFileItem]] = []
+    documents: List[Tuple[Tuple, TaskFileItem]] = []
+    work: List[TaskFileItem] = []
     for p in paths:
-        kind = T.task_doc_kind(p, root) or (docs[p]["kind"] if p in docs else None) or "other"
+        kind = T.task_doc_kind(p, root) or (docs[p]["kind"] if p in docs else classify_kind(p, home, root))
         rel = relations.get(p, ("named", "") if p in named else (None, ""))[0]
-        try:
-            mtime = os.stat(p).st_mtime
-        except OSError:
-            mtime = 0.0
+        item = _file_item(p, os.path.relpath(p, task_dir), docs.get(p), kind, _REL_LABELS.get(rel) if rel else None,
+                          False)
+        if is_work_file(p, kind, doc_extensions):
+            work.append(item)
+            continue
         order = (0 if os.path.basename(p) == T.TASK_MD and os.path.dirname(p) == task_dir else 1,
-                 _KIND_ORDER.index(kind) if kind in _KIND_ORDER else len(_KIND_ORDER), -mtime, p)
-        items.append((order, _file_item(p, os.path.relpath(p, task_dir), docs.get(p), kind,
-                                        _REL_LABELS.get(rel) if rel else None, False)))
-    items.sort(key=lambda x: x[0])
-    return [item for _, item in items], cut
+                 _KIND_ORDER.index(kind) if kind in _KIND_ORDER else len(_KIND_ORDER), -(item.mtime or 0.0), p)
+        documents.append((order, item))
+    documents.sort(key=lambda x: x[0])
+    work.sort(key=lambda i: (-(i.mtime or 0.0), i.rel_path))
+    shown = work[:WORK_FILES_LIMIT]
+    shown.sort(key=lambda i: (os.path.dirname(i.rel_path) != "", os.path.dirname(i.rel_path), -(i.mtime or 0.0),
+                              i.rel_path))
+    return _FolderFiles([item for _, item in documents], shown, len(work), cut)
 
 
 def _copied(path: str, task_dir: str) -> bool:
@@ -514,7 +551,8 @@ def _sessions_list(conn: sqlite3.Connection, task: str, live: Dict[str, LiveSess
 def task_detail(conn: sqlite3.Connection, name: str, *, live: Dict[str, LiveSession], home: str,
                 exclude_dirs: Sequence[str], ticket_template: Optional[str],
                 default_branches: Sequence[str] = ("main", "master", "develop"),
-                max_depth: int = 6) -> Optional[TaskDetail]:
+                max_depth: int = 6, doc_extensions: Sequence[str] = tuple(DEFAULT_DOC_EXTENSIONS),
+                max_files: int = 3000) -> Optional[TaskDetail]:
     found = _task_rows(conn, live, only=name)
     if not found:
         return None
@@ -546,7 +584,8 @@ def task_detail(conn: sqlite3.Connection, name: str, *, live: Dict[str, LiveSess
 
     relations = _doc_relations(conn, [s["id"] for s in trusted])
     named = set(json.loads(r["refs"] or "[]"))
-    folder_files, cut = _folder_files(conn, task_dir, root, exclude_dirs, max_depth, relations, named)
+    folder = _folder_files(conn, task_dir, root, home, exclude_dirs, max_depth, max_files, doc_extensions, relations,
+                           named)
     shared, other = _doc_bundles(conn, task_dir, root, relations, named)
     md_doc = _docs_by_path(conn, [task_md]).get(task_md)
     return TaskDetail(
@@ -555,9 +594,11 @@ def task_detail(conn: sqlite3.Connection, name: str, *, live: Dict[str, LiveSess
         updated_at=_iso(updated) if updated is not None else (_iso(r["md_mtime"]) if r["md_mtime"] else None),
         sections=sections, after=after, warnings=warnings, ticket_links=ticket_links(r["ticket"], repo=repo,
                                                                                     template=ticket_template),
-        branch=branch, prs=prs, folder_files=folder_files, folder_cut=cut, shared_docs=shared[:DOC_BUNDLE_LIMIT],
+        branch=branch, prs=prs, folder_files=folder.documents, folder_cut=folder.cut,
+        shared_docs=shared[:DOC_BUNDLE_LIMIT],
         other_docs=other[:DOC_BUNDLE_LIMIT], sessions=_sessions_list(conn, name, live),
-        repo=repo, shared_total=len(shared), other_total=len(other))
+        repo=repo, shared_total=len(shared), other_total=len(other), work_files=folder.work,
+        work_total=folder.work_total)
 
 
 # tsuzuki task list（台帳を使わない）

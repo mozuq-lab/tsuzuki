@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from tsuzuki.render import fmt_local, render_markdown, render_plain
 from tsuzuki.retention import iso_utc
 from tsuzuki.tasks import SHARED_DIR, STAGES, TaskFile, at_reference, no_waiting, stage_label, ticket_numbers
-from tsuzuki.taskviews import (DOC_BUNDLE_LIMIT, STATUS_LABELS, TASK_FILES_LIMIT, TaskDetail, TaskFileItem, TaskRow,
+from tsuzuki.taskviews import (DOC_BUNDLE_LIMIT, STATUS_LABELS, WORK_FILES_LIMIT, TaskDetail, TaskFileItem, TaskRow,
                               TaskSessionItem)
 from tsuzuki.ui_render import _attrs, _badges, _button, _e, _filter_row, _join, _n, _period, _tilde
 
@@ -365,7 +365,7 @@ def _documents(d: TaskDetail, home: Optional[str]) -> str:
         out += [_file_row(item, shown(item), copy_to_task=items is d.other_docs) for item in items]
         if items is d.folder_files and d.folder_cut:
             out.append('<div class="listnote">フォルダーのファイルが多いため、%s件まで並べています</div>'
-                       % _n(TASK_FILES_LIMIT))
+                       % _n(WORK_FILES_LIMIT))
         if bundle_total > len(items):  # 共通の資料とほかの場所の資料は、新しい順に上限まで
             out.append('<div class="listnote">新しい順に%s件まで並べています（ほか %s件）</div>'
                        % (_n(DOC_BUNDLE_LIMIT), _n(bundle_total - len(items))))
