@@ -8,7 +8,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, FrozenSet, List, Optional, Pattern, Sequence, Tuple
+from typing import Callable, Dict, FrozenSet, List, Optional, Pattern, Sequence, Set, Tuple
 
 from tsuzuki.retention import DAY_SECONDS, iso_utc
 from tsuzuki.store import has_trigram
@@ -107,6 +107,22 @@ def parse_query(text: str) -> List[str]:
             seen.add(piece)
             terms.append(piece)
     return terms
+
+
+def conversation_turns(conn: sqlite3.Connection, session_id: str, terms: Sequence[str]) -> List[int]:
+    """1つの会話（台帳の発言）の中で、すべての語がそろうターンを古い順に返す。語ごとに、その語を含む発言の
+    あるターンを求め、共通部分を取る（上の検索窓の会話と同じく、語は同じターンの別の発言に分かれていてよい）。
+    発言者は問わない。英字だけ大文字と小文字を区別しない（LIKE）。"""
+    found = None  # type: Optional[Set[int]]
+    for term in terms:
+        pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        turns = {row[0] for row in conn.execute(
+            "SELECT DISTINCT turn FROM messages WHERE session_id = ? AND text LIKE ? ESCAPE '\\'",
+            (session_id, pattern))}
+        found = turns if found is None else found & turns
+        if not found:
+            return []
+    return sorted(found or ())
 
 
 def search(conn: sqlite3.Connection, q: SearchQuery, *, now: Callable[[], float] = time.time) -> SearchResult:

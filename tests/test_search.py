@@ -790,5 +790,45 @@ class SearchSpeedTest(unittest.TestCase):
                     self.assertLess(seconds, 1.0)
 
 
+
+class ConversationTurnsTest(unittest.TestCase):
+    """1つの会話の中で、すべての語がそろうターン（search.conversation_turns）。"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.conn = make_ledger(Path(tmp.name))
+        self.addCleanup(self.conn.close)
+
+    def add(self, session_id, rows):
+        """セッションと、その発言（ターン、発言者、文）を入れる。"""
+        with self.conn:
+            self.conn.execute("INSERT INTO sessions(id, transcript_path, kind) VALUES (?, ?, 'interactive')",
+                              (session_id, "/x/%s.jsonl" % session_id))
+            for seq, (turn, role, text) in enumerate(rows):
+                self.conn.execute("INSERT INTO messages(session_id, seq, turn, ts, role, text) VALUES (?, ?, ?, ?, ?, ?)",
+                                  (session_id, seq, turn, t(seq), role, text))
+
+    def turns(self, session_id, *terms):
+        return search_mod.conversation_turns(self.conn, session_id, list(terms))
+
+    def test_all_terms_in_one_turn(self):
+        self.add(S4, [(1, "user", "赤い旗を"), (1, "assistant", "青い空です"), (2, "user", "赤い"),
+                      (3, "assistant", "青い"), (4, "tool", "Bash（赤い 青い）")])
+        self.assertEqual(self.turns(S4, "赤い", "青い"), [1, 4])  # 語が同じターンの別の発言に分かれていてもよい
+        self.assertEqual(self.turns(S4, "赤い"), [1, 2, 4])  # 古い順
+        self.assertEqual(self.turns(S4), [])
+
+    def test_case_short_terms_quotes_and_other_sessions(self):
+        self.add(S4, [(1, "user", "Git Push して"), (2, "user", "%_ と \\ を探す")])
+        self.add(S5, [(1, "user", "料理の話"), (3, "assistant", "料理です")])
+        self.assertEqual(self.turns(S4, "git push"), [1])
+        self.assertEqual(self.turns(S4, "し"), [1])
+        self.assertEqual(self.turns(S4, "%_"), [2])
+        self.assertEqual(self.turns(S4, "\\"), [2])
+        self.assertEqual(self.turns(S4, "料理"), [])  # S5 にはあるが、S4 にはない
+        self.assertEqual(self.turns(S5, "料理"), [1, 3])
+
+
 if __name__ == "__main__":
     unittest.main()
