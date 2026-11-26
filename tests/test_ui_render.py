@@ -1006,6 +1006,24 @@ class UiRenderTest(SafeMarkup, Ledger):
         self.assertEqual([a.get("value") for tag, a in m.tags if a.get("class") == "conv-q"], [EVIL])
         self.assertIn("<mark>", html)
 
+    def test_reply_copy(self):
+        raw = "## 見出し\n\n- a\n- **b**\n"
+        items = [ConvItem("user", t(0), "質問", 1, []), ConvItem("assistant", t(1), raw, 1, []),
+                 ConvItem("tools", t(1), "", 1, ["Read a.md"])]
+        html = frag_conversation(ConversationWindow(S1, items, 0, 1, 1, "ledger"), title="x", terms=[], hit_turns=[])
+        m = self.assertSafe(html)
+        copies = [a for tag, a in m.tags if a.get("data-action") == "copy"]
+        self.assertEqual([a["data-copy"] for a in copies], [raw])
+        self.assertEqual(copies[0]["class"], "cp reply-copy")
+        self.assertLess(html.index('<div class="who">Claude'), html.index("reply-copy"))
+        self.assertLess(html.index("reply-copy"), html.index("<h2>見出し</h2>"))
+
+    def test_reply_copy_escapes(self):
+        items = [ConvItem("assistant", t(1), EVIL, 1, [])]
+        html = frag_conversation(ConversationWindow(S1, items, 0, 1, 1, "ledger"), title="x", terms=[], hit_turns=[])
+        m = self.assertSafe(html)
+        self.assertEqual([a["data-copy"] for tag, a in m.tags if a.get("data-action") == "copy"], [EVIL])
+
     def test_conversation_offers_add_to_task(self):
         # 会話の画面の見出しにも「タスクに足す」を置く。足せるタスクがなければ出さない
         w = ConversationWindow(S1, [ConvItem("user", t(0), "依頼", 1, [])], 0, 1, 1, "ledger")

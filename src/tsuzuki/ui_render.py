@@ -547,8 +547,11 @@ def _conversation_items(w: ConversationWindow, terms: Sequence[str], marked: Opt
                 anchored.add(item.turn)
                 pairs.append(("id", "turn-%d" % item.turn))
             pairs.append(("data-turn", item.turn))
-            out.append('<div%s><div class="who">%s</div><div class="b md">%s</div></div>' % (
-                _attrs(*pairs), _join([WHO[item.kind], _e(fmt_local(item.ts))]),
+            # Claude の応答には、元の文（Markdown）をそのままコピーするボタンを付ける
+            copy = (_button("コピー", "cp reply-copy", ("data-action", "copy"), ("data-copy", item.text))
+                    if item.kind == "assistant" else "")
+            out.append('<div%s><div class="who">%s</div>%s<div class="b md">%s</div></div>' % (
+                _attrs(*pairs), _join([WHO[item.kind], _e(fmt_local(item.ts))]), copy,
                 _mark_html(render_markdown(item.text, breaks=True), words)))
     return "".join(out)
 

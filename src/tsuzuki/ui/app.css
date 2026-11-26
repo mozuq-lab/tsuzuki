@@ -731,6 +731,9 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 .back:hover { color: var(--accent); }
 .hits { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
 .turn { margin: .55rem 0; scroll-margin-top: 5.5rem; }
+.turn.a { position: relative; }
+/* 応答のコピー：発言者と時刻の行の右に置く */
+.turn .reply-copy { position: absolute; top: -.15rem; right: 0; }
 .turn .b { padding: .4rem .7rem; border-radius: 8px; overflow-wrap: anywhere; }
 .turn.u .b { background: var(--selected-bg); }
 .turn.a .b { border: 1px solid var(--border); background: var(--bg-primary); }

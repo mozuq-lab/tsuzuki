@@ -36,7 +36,7 @@ FRAGMENT_CLASSES = (
     "doc", "doc-view", "docframe", "empty", "ev", "excerpt", "folder", "foot", "go", "gone", "head", "headless", "hist",
     "hits", "k", "kids", "kind", "kv", "lab", "link", "listhead", "listnote", "live", "m", "md", "meta", "more",
     "moved", "nav", "none", "notice", "on", "other", "p", "path", "ph", "place", "place-ov", "pri", "pt", "r", "recap",
-    "rel", "reply", "row", "sec", "t", "tiny", "tl", "tli", "tool", "tools", "turn", "ty", "u", "v", "via", "w", "who",
+    "rel", "reply", "reply-copy", "row", "sec", "t", "tiny", "tl", "tli", "tool", "tools", "turn", "ty", "u", "v", "via", "w", "who",
     "x",
     "waiting-form",
 )
