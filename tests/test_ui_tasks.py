@@ -267,6 +267,22 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertLess(html.index("ブランチ・PR"), html.index('<details class="prep">'))
         self.assertLess(html.index('<details class="prep">'), html.index('<div class="sec">会話'))
 
+    def test_card_prep_marks_stale_items_and_offers_to_add(self):
+        html = self.card_prep(["skills"], stale=("readme", "rule"), rule_line="- 作業用のファイルの1行")
+        m = self.assertSafe(html)
+        self.assertIn("<summary>Claude で使う準備：あと 3つ</summary>", html)
+        self.assertEqual(re.findall(r'<div class="prep-name">([^<]*)</div>', html),
+                         ["△ 決まりのファイル（古い）", "△ CLAUDE.local.md の決まり（古い）", "✗ スキル"])
+        self.assertEqual(re.findall(r'<div class="prep-what">([^<]*)</div>', html)[:2], [
+            "~/tasks/README.md に「作業用のファイル」の節がありません。末尾に足します",
+            "~/dev/app/CLAUDE.local.md に、作業用のファイルの1行を足します"])
+        self.assertEqual(len(m.tags_with("data-action", "tasks-readme")), 1)
+        self.assertEqual([a["data-item"] for _, a in m.tags_with("data-action", "task-prep")], ["rule", "skills"])
+        self.assertEqual(re.findall(r'<div class="prep-btns">(.*?)</div>', html)[1],
+                         '<button class="btn" data-action="task-prep" data-item="rule">足す</button>'
+                         '<button class="btn" data-action="copy" data-copy="- 作業用のファイルの1行">1行をコピー</button>')
+        self.assertNotIn('class="prep"', self.card_prep([], stale=()))
+
     def test_card_prep_shows_only_what_is_missing_and_nothing_when_complete(self):
         html = self.card_prep(["allow"])
         self.assertIn("<summary>Claude で使う準備：あと 1つ</summary>", html)

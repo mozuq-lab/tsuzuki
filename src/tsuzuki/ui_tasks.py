@@ -51,9 +51,10 @@ CARD_PREP_ORDER = (CARD_README, CARD_RULE, CARD_SKILLS, CARD_ALLOW)
 
 @dataclass(frozen=True)
 class CardPrep:
-    """カードの「Claude で使う準備」に出すもの。missing はまだ整っていない項目（CARD_*）、あとは表示用のパス
-    （ホームの下は ~）：start は会話を始めるフォルダー、readme は置き場所の README.md、rule_file・skills_dir・
-    allow_file は置く先。"""
+    """カードの「Claude で使う準備」に出すもの。missing はまだ整っていない項目（CARD_*）、stale はあるが古い項目
+    （CARD_README・CARD_RULE）、あとは表示用のパス（ホームの下は ~）：start は会話を始めるフォルダー、readme は
+    置き場所の README.md、rule_file・skills_dir・allow_file は置く先。rule_line は古い決まりの文に足す1行
+    （最後の改行なし。「1行をコピー」でコピーする）。"""
     missing: Tuple[str, ...]
     start: str = ""
     readme: str = ""
@@ -61,6 +62,8 @@ class CardPrep:
     skills_dir: str = ""
     allow_file: str = ""
     note: str = ""
+    stale: Tuple[str, ...] = ()
+    rule_line: str = ""
 
 
 def _card_prep(prep: Optional[CardPrep]) -> str:
@@ -80,7 +83,14 @@ def _card_prep(prep: Optional[CardPrep]) -> str:
                      "%s の additionalDirectories に、タスクの置き場所を足します" % prep.allow_file,
                      _button("足す", "btn", ("data-action", "task-prep"), ("data-item", "allow"))),
     }
-    shown = [key for key in CARD_PREP_ORDER if key in prep.missing]
+    stale = {
+        CARD_README: ("決まりのファイル", "%s に「作業用のファイル」の節がありません。末尾に足します" % prep.readme,
+                      _button("足す", "btn", ("data-action", "tasks-readme"))),
+        CARD_RULE: ("CLAUDE.local.md の決まり", "%s に、作業用のファイルの1行を足します" % prep.rule_file,
+                    _button("足す", "btn", ("data-action", "task-prep"), ("data-item", "rule"))
+                    + _button("1行をコピー", "btn", ("data-action", "copy"), ("data-copy", prep.rule_line))),
+    }
+    shown = [key for key in CARD_PREP_ORDER if key in prep.missing or key in prep.stale]
     if not shown:
         return ""
     out = ['<details class="prep"><summary>Claude で使う準備：あと %sつ</summary>' % len(shown),
@@ -88,9 +98,14 @@ def _card_prep(prep: Optional[CardPrep]) -> str:
                "このタスクの会話を始めるフォルダー（%s）に置きます。そこで始めた会話にだけ効き、"
                "ほかのプロジェクトの会話には効きません。" % prep.start)]
     for key in shown:
-        name, what, button = items[key]
-        out.append('<div class="prep-item"><div class="prep-name">✗ %s</div><div class="prep-what">%s</div>'
-                   '<div class="prep-btns">%s</div></div>' % (_e(name), _e(what), button))
+        if key in prep.missing:
+            name, what, button = items[key]
+            mark = "✗ " + name
+        else:
+            name, what, button = stale[key]
+            mark = "△ %s（古い）" % name
+        out.append('<div class="prep-item"><div class="prep-name">%s</div><div class="prep-what">%s</div>'
+                   '<div class="prep-btns">%s</div></div>' % (_e(mark), _e(what), button))
     out.append("</details>")
     return "".join(out)
 

@@ -1108,7 +1108,7 @@ class TaskServerTest(ServerCase):
     def card_prep(self, task="2026-11-20-a"):
         """カードの「Claude で使う準備」の（項目の名前、説明、ボタンの項目）の並びと、まとめの文。"""
         card = self.frag("/frag/task/" + quote(task))
-        names = re.findall(r'<div class="prep-name">✗ ([^<]*)</div>', card)
+        names = re.findall(r'<div class="prep-name">[✗△] ([^<]*)</div>', card)
         whats = [html.unescape(w) for w in re.findall(r'<div class="prep-what">([^<]*)</div>', card)]
         items = re.findall(r'<details class="prep"><summary>([^<]*)</summary>', card)
         return card, names, whats, items
@@ -1154,6 +1154,31 @@ class TaskServerTest(ServerCase):
         self.assertNotIn("prep", card)
         again = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
         self.assertEqual((again["ok"], again["message"]), (True, "もう整っています"))
+
+    def test_stale_readme_and_rule_are_brought_up_to_date_from_the_card(self):
+        from tsuzuki.export import display_path, readme_section, rule_line
+        self.app.cfg = Config(tasks_root=self.tasks_root)
+        shown = display_path(Path(self.tasks_root), self.home)
+        readme = os.path.join(self.tasks_root, "README.md")
+        write_file(readme, "# 古い決まり\n")
+        local = os.path.join(self.proj, "CLAUDE.local.md")
+        old = "## タスクと資料\n- %s/README.md を読む\n" % self.tasks_root
+        write_file(local, old)
+        card, names, whats, summary = self.card_prep()
+        self.assertEqual(names[:2], ["決まりのファイル（古い）", "CLAUDE.local.md の決まり（古い）"])
+        r = self.action("/api/tasks-readme", {}).json()
+        self.assertEqual((r["ok"], r["message"]),
+                         (True, "タスクの決まり（README.md）に、作業用のファイルの節を足しました: %s/README.md" % shown))
+        self.assertEqual(self.text(readme), "# 古い決まり\n\n" + readme_section(tasks_root_display=shown))
+        again = self.action("/api/tasks-readme", {}).json()
+        self.assertFalse(again["ok"])
+        self.assertIn("README.md はもうあります", again["message"])
+        r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
+        self.assertEqual((r["ok"], r["message"]), (True, "%s/CLAUDE.local.md に作業用のファイルの1行を足しました" % self.proj))
+        self.assertEqual(self.text(local), old + "\n" + rule_line(tasks_root_display=shown))
+        self.assertNotIn("（古い）", self.card_prep()[0])
+        done = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
+        self.assertEqual((done["ok"], done["message"]), (True, "もう整っています"))
 
     def test_task_card_prep_for_a_task_without_a_repo_uses_the_task_folder(self):
         folder = os.path.join(self.tasks_root, "2026-11-22-ログイン")

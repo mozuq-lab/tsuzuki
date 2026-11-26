@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, unquote
 from tsuzuki import taskprep, taskviews, ui_render, ui_tasks, views
 from tsuzuki.config import (Config, ConfigError, normalize_tasks_root_input, normalize_ticket_url, read_config,
                             resolve_tasks_root, write_tasks_root, write_ticket_url)
-from tsuzuki.export import display_path, template_text
+from tsuzuki.export import display_path, readme_is_current, readme_section, rule_line, template_text
 from tsuzuki.privacy import os_error_text
 from tsuzuki.indexer import UpdateReport, update, update_lock
 from tsuzuki.resume import ActionOutcome, is_session_id, open_document, open_place, resume, start_conversation
@@ -115,6 +115,8 @@ NO_START_DIR = "会話を始めるフォルダーが見つかりません"
 PREP_RULE_PLACED = "%s に決まりの文を足しました"
 PREP_SKILLS_PLACED = "%s にスキルを置きました"
 PREP_ALLOW_PLACED = "%s の additionalDirectories にタスクの置き場所を足しました"
+PREP_RULE_LINE_ADDED = "%s に作業用のファイルの1行を足しました"
+README_SECTION_ADDED = "タスクの決まり（README.md）に、作業用のファイルの節を足しました: %s"
 PREP_DONE = "もう整っています"
 BAD_PREP_ITEM = "準備の項目が正しくありません"
 UNKNOWN_TASK = "台帳にないタスクです"
@@ -820,14 +822,15 @@ def _card_prep(app: App, conn: sqlite3.Connection, task: str) -> Optional[ui_tas
         return None
     if prep.broad:
         return ui_tasks.CardPrep(missing=(), note=taskprep.BROAD_START)
-    if not prep.missing:
+    if not prep.missing and not prep.stale:
         return None
     return ui_tasks.CardPrep(
         missing=prep.missing, start=display_path(Path(start), app.home),
         readme=display_path(root / "README.md", app.home),
         rule_file=display_path(Path(start) / taskprep.RULE_FILE, app.home),
         skills_dir=display_path(Path(start) / ".claude" / "skills", app.home),
-        allow_file=display_path(Path(prep.allow_file), app.home))
+        allow_file=display_path(Path(prep.allow_file), app.home), stale=prep.stale,
+        rule_line=rule_line(tasks_root_display=display_path(root, app.home)).rstrip("\n"))
 
 
 def _frag_new_task(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:
@@ -1120,10 +1123,17 @@ def _api_tasks_readme(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
         if root is None:
             return _task_failed(NO_TASKS_ROOT)
         shown = display_path(root, app.home)
+        readme = root / "README.md"
         try:
+            if os.path.isfile(str(readme)) and not os.path.islink(str(readme)) and not readme_is_current(
+                    readme.read_text(encoding="utf-8", errors="replace")):
+                # 古い README には、作業用のファイルの節だけを末尾に足す（前からある文は変えない）
+                taskprep.append_readme_section(str(root), readme_section(tasks_root_display=shown),
+                                               claude_dir=str(app.claude_dir))
+                return _task_done(README_SECTION_ADDED % (shown + "/README.md"))
             text = template_text("templates/tasks-README.md", tasks_root_display=shown)
             place_tasks_readme(root, text, claude_dir=app.claude_dir)
-        except (TaskWriteError, OSError) as e:
+        except (TaskWriteError, TaskPrepError, OSError) as e:
             return _task_failed(str(e))
     return _task_done(README_PLACED % (shown + "/README.md"))
 
@@ -1148,15 +1158,18 @@ def _api_task_prep(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
             prep = taskprep.check(start, str(root), home=app.home, claude_dir=claude)
             if prep.broad:
                 return _task_failed(taskprep.BROAD_START)
-            if item not in prep.missing:
+            if item not in prep.missing and item not in prep.stale:
                 return _task_done(PREP_DONE)
         except OSError as e:
             return _task_failed("調べられませんでした（%s）" % os_error_text(e))
         shown = display_path(root, app.home)
         try:
-            if item == taskprep.RULE:
+            if item == taskprep.RULE and item in prep.missing:
                 path = taskprep.place_rule(start, taskprep.rule_snippet(shown), claude_dir=claude)
                 message = PREP_RULE_PLACED % display_path(Path(path), app.home)
+            elif item == taskprep.RULE:
+                path = taskprep.add_rule_line(start, rule_line(tasks_root_display=shown), claude_dir=claude)
+                message = PREP_RULE_LINE_ADDED % display_path(Path(path), app.home)
             elif item == taskprep.SKILLS:
                 folder, _, kept = taskprep.place_skills(start, tasks_root_display=shown, claude_dir=claude)
                 message = PREP_SKILLS_PLACED % display_path(Path(folder), app.home)
