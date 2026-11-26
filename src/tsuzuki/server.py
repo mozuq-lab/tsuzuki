@@ -45,7 +45,7 @@ from tsuzuki.resume import (ActionOutcome, is_session_id, open_document, open_fo
 from tsuzuki.vscode_ext import VSCodeTerminal, requests_dir
 from tsuzuki.retention import iso_utc
 from tsuzuki.search import (DEFAULT_TARGETS, MAX_TERM_CHARS, MAX_TERMS, ORDERS, RESULT_LIMIT, TARGETS, DocHit,
-                           SearchQuery, SearchResult, parse_query, search)
+                           SearchQuery, SearchResult, conversation_turns, parse_query, search)
 from tsuzuki.sources.live import LiveSession, live_sessions
 from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger, set_meta
 from tsuzuki.taskindex import ROOT_KEY, forget_task, refresh_task, reset_task_index
@@ -731,16 +731,22 @@ def _frag_doc(app: App, conn: sqlite3.Connection, doc_id: int, p: _Params) -> st
 
 
 def _frag_conversation(app: App, conn: sqlite3.Connection, session_id: str, p: _Params) -> str:
-    """会話。turn（既定は最後のターン）の前後の窓を出す。before・after・offset があれば、読み足す分だけを返す。"""
-    turn, turns, terms = p.number("turn"), p.numbers("turns"), _terms(p.text("q"))
+    """会話。q は会話の中の検索の語で、この会話の中で一致したターン（古い順）を求め、そのターンにだけ印を付ける。
+    窓は turn の前後、なければ一致の最後のターンの前後、一致もなければ最後のターンの前後。before・after・offset が
+    あれば、読み足す分だけを返す。"""
+    turn, text = p.number("turn"), p.text("q").strip()
+    terms = _terms(text)
     before, after, offset = p.number("before"), p.number("after"), p.number("offset")
     if before is not None or after is not None or offset is not None:
         return _conversation_part(conn, session_id, terms, before, after, offset)
-    window = views.conversation_window(conn, session_id, around_turn=turn)
+    hits = conversation_turns(conn, session_id, terms) if terms else []
+    around = turn if turn is not None else (hits[-1] if hits else None)
+    window = views.conversation_window(conn, session_id, around_turn=around)
     if window is None:
         raise _HttpError(404, NOT_FOUND)
     row = views.session_rows(conn, [session_id], live={}).get(session_id)
-    return ui_render.frag_conversation(window, title=row.title if row else "", terms=terms, hit_turns=turns,
+    return ui_render.frag_conversation(window, title=row.title if row else "", terms=terms, hit_turns=hits,
+                                       query_text=text,
                                        task_choices=taskviews.open_task_choices(conn, session_id) if row else ())
 
 
@@ -762,7 +768,8 @@ def _conversation_part(conn: sqlite3.Connection, session_id: str, terms: List[st
         raise _HttpError(404, NOT_FOUND)
     if window.source != source:
         return ""
-    return ui_render.frag_conversation_part(window, terms=terms, side=side)
+    hits = conversation_turns(conn, session_id, terms) if terms else []
+    return ui_render.frag_conversation_part(window, terms=terms, side=side, hit_turns=hits)
 
 
 def _frag_task_filters(app: App, conn: sqlite3.Connection, _: None, p: _Params) -> str:

@@ -31,7 +31,7 @@ HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", 
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く
 FRAGMENT_CLASSES = (
     "a", "after", "b", "back", "badge", "body", "btn", "btns", "card", "child", "children", "col", "cols", "conv",
-    "conv-more", "dh",
+    "conv-more", "conv-q", "dh",
     "doc", "doc-view", "docframe", "empty", "ev", "excerpt", "folder", "foot", "go", "gone", "head", "headless", "hist",
     "hits", "k", "kids", "kind", "kv", "lab", "link", "listhead", "listnote", "live", "m", "md", "meta", "more",
     "moved", "nav", "none", "notice", "on", "other", "p", "path", "ph", "place", "place-ov", "pri", "pt", "r", "recap",

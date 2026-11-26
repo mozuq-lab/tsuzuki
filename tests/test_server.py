@@ -700,7 +700,7 @@ class ServerTest(ServerCase):
         self.assertNotIn("<mark>", frag("/frag/doc/%d" % self.md_doc))
         conv = frag("/frag/conversation/%s?turn=1&turns=2,1&q=%s" % (S1, quote("引き継ぎ")))
         self.assertIn('id="turn-1"', conv)
-        self.assertIn('data-turns="2,1"', conv)
+        self.assertIn('data-turns="1,2"', conv)  # サーバーが古い順で求める（turns の問い合わせは使わない）
         self.assertIn("<mark>引き継ぎ</mark>", conv)
         self.assertIn("子の課題", frag("/frag/conversation/" + S9))
 
@@ -735,6 +735,13 @@ class ServerTest(ServerCase):
         self.assertEqual(re.findall(r'id="turn-(\d+)"', part), [str(n) for n in range(20, 40)])
         self.assertEqual(part.count("<mark>質問</mark>"), 20)
         self.assertNotIn('class="conv"', part)
+        hits = frag("/frag/conversation/%s?q=%s" % (long_id, quote("質問5")))  # 質問5・質問50〜59
+        self.assertIn('data-turns="5,50,51,52,53,54,55,56,57,58,59"', hits)
+        self.assertIn('id="turn-59"', hits)  # 窓は一致の最後のターンの周り
+        both = frag("/frag/conversation/%s?q=%s" % (long_id, quote("質問 答え1")))
+        self.assertIn('data-turns="1,10,11,12,13,14,15,16,17,18,19"', both)
+        no_hits = frag("/frag/conversation/%s?before=40&q=%s" % (long_id, quote("質問5")))
+        self.assertEqual(no_hits.count("<mark>"), 0)  # ターン20〜39 には一致がない
         rest = frag("/frag/conversation/%s?before=20" % long_id)
         self.assertEqual(re.findall(r'id="turn-(\d+)"', rest), [str(n) for n in range(1, 20)])
         self.assertNotIn("read-more", rest)
@@ -750,7 +757,8 @@ class ServerTest(ServerCase):
         task = frag("/frag/conversation/" + task_id)
         self.assertIn(button("after", "offset", 200, "後の 51 件を読む（残り 51）"), task)
         more = frag("/frag/conversation/%s?offset=200" % task_id)  # 項目 199 は「手順100」、200 はそのツール
-        self.assertTrue(more.startswith('<details class="tools"><summary>ツール1回：Bash（ls）</summary>'), more[:200])
+        self.assertTrue(more.startswith('<details class="tools" data-turn="0"><summary>ツール1回：Bash（ls）</summary>'),
+                        more[:200])
         self.assertIn(">手順101<", more)
         self.assertIn(">手順125<", more)
         self.assertNotIn(">手順100<", more)

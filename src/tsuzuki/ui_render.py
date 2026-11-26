@@ -470,14 +470,21 @@ def frag_doc(d: DocumentDetail, *, terms: Sequence[str] = ()) -> str:
 
 
 def frag_conversation(w: ConversationWindow, *, title: str, terms: List[str], hit_turns: Sequence[int],
-                      task_choices: Sequence[Tuple[str, str]] = ()) -> str:
+                      query_text: str = "", task_choices: Sequence[Tuple[str, str]] = ()) -> str:
     """会話。発言は Markdown として出し（改行はそのまま <br> にする）、検索の語に印を付ける。続けて呼んだツールは畳む。
     長い会話は窓（views.conversation_window）で出し、前後に残りがあれば読み足すボタンを付ける。
-    見出しには、題の下に「タスクに足す」を置く（task_choices があれば）。"""
+    見出しには、題の下に「タスクに足す」を置く（task_choices があれば）。台帳の会話には「この会話を探す」の欄
+    （値は query_text）を置き、語があれば一致したターンの数と ▲▼ を添える。hit_turns は古い順の一致したターンで、
+    台帳の会話では、そのターンにだけ印を付ける（ヘッドレスの記録は、今までどおり語のある所すべて）。"""
     turns = [int(n) for n in hit_turns]
+    ledger = w.source == "ledger"
     tools = ""
-    if turns:  # 移動は画面が <mark> の間で行うので、端でも止めない
-        tools = '<span class="hits">一致 %sか所</span>' % _n(len(turns)) + _hit_buttons()
+    if ledger:
+        tools = "<input%s>" % _attrs(("class", "conv-q"), ("type", "search"), ("value", query_text),
+                                     ("placeholder", "この会話を探す"), ("aria-label", "この会話を探す"),
+                                     ("autocomplete", "off"), ("spellcheck", "false"))
+        if terms:  # 「一致 k/N」と、読み込んでいない一致への移動は画面が受け持つ
+            tools += '<span class="hits">一致 %s</span>' % _n(len(turns)) + _hit_buttons(not turns, not turns)
     tools += _button("中央を畳む", "btn", ("data-action", "fold"))
     back = _button("← 状況カードに戻る", "back", ("data-action", "card"), ("data-session", w.session_id))
     out = ["<div%s>" % _attrs(("class", "conv"), ("data-turns", _csv(turns))),
@@ -485,15 +492,18 @@ def frag_conversation(w: ConversationWindow, *, title: str, terms: List[str], hi
                back, _e(title), _task_adder(w.session_id, task_choices), tools)]
     if w.source == "none":
         out.append('<div class="empty">会話の本文は残っていません</div>')
-    out += [_read_more(w, "before"), _conversation_items(w, terms), _read_more(w, "after"), "</div>"]
+    out += [_read_more(w, "before"), _conversation_items(w, terms, _marked(w, turns)), _read_more(w, "after"),
+            "</div>"]
     return "".join(out)
 
 
-def frag_conversation_part(w: ConversationWindow, *, terms: Sequence[str], side: str) -> str:
+def frag_conversation_part(w: ConversationWindow, *, terms: Sequence[str], side: str,
+                           hit_turns: Sequence[int] = ()) -> str:
     """会話に読み足す分（views.conversation_window の turns・item_offset で読んだ窓）。会話の枠と見出しは付けない。
-    前に足す分（side="before"）は、まだ前に残りがあれば読み足すボタンを先に、後ろに足す分は後に付ける。"""
+    前に足す分（side="before"）は、まだ前に残りがあれば読み足すボタンを先に、後ろに足す分は後に付ける。
+    印の付け方は frag_conversation と同じ（台帳の会話では hit_turns のターンにだけ）。"""
     more = _read_more(w, side)
-    items = _conversation_items(w, terms)
+    items = _conversation_items(w, terms, _marked(w, [int(n) for n in hit_turns]))
     return more + items if side == "before" else items + more
 
 
@@ -515,31 +525,40 @@ def _read_more(w: ConversationWindow, side: str) -> str:
                    ("data-dir", side), edge)
 
 
-def _conversation_items(w: ConversationWindow, terms: Sequence[str]) -> str:
+def _marked(w: ConversationWindow, hit_turns: Sequence[int]) -> Optional[Set[int]]:
+    """印を付けるターン。台帳の会話は一致したターンだけ、ヘッドレスの記録はすべて（None）。"""
+    return set(hit_turns) if w.source == "ledger" else None
+
+
+def _conversation_items(w: ConversationWindow, terms: Sequence[str], marked: Optional[Set[int]] = None) -> str:
     """会話の窓の発言とツール。本人の入力には、ターンごとに最初の1つにだけ id="turn-N" を付ける
-    （ヘッドレスの記録はターンがすべて 0 なので、続きの断片には付けない。ページの中で重なるため）。"""
+    （ヘッドレスの記録はターンがすべて 0 なので、続きの断片には付けない。ページの中で重なるため）。
+    発言とツールには data-turn を付け、印は marked のターン（None ならすべて）にだけ付ける。"""
     out = []
     anchored = set()  # type: Set[int]
     anchors = not (w.source == "transcript" and w.offset > 0)
     for item in w.items:
+        words = terms if marked is None or item.turn in marked else ()
         if item.kind == "tools":
-            out.append(_tools(item.tools, terms))
+            out.append(_tools(item.tools, words, item.turn))
         elif item.kind in WHO:
             pairs = [("class", "turn u" if item.kind == "user" else "turn a")]  # type: List[Attr]
             if anchors and item.kind == "user" and item.turn not in anchored:
                 anchored.add(item.turn)
                 pairs.append(("id", "turn-%d" % item.turn))
+            pairs.append(("data-turn", item.turn))
             out.append('<div%s><div class="who">%s</div><div class="b md">%s</div></div>' % (
                 _attrs(*pairs), _join([WHO[item.kind], _e(fmt_local(item.ts))]),
-                _mark_html(render_markdown(item.text, breaks=True), terms)))
+                _mark_html(render_markdown(item.text, breaks=True), words)))
     return "".join(out)
 
 
-def _tools(summaries: List[str], terms: Sequence[str]) -> str:
+def _tools(summaries: List[str], terms: Sequence[str], turn: int) -> str:
     """「ツール N 回：…」の1行に畳む。語に当たる要約があれば開いておく。"""
     opened = " open" if any(_marks(s, terms) for s in summaries) else ""
-    return '<details class="tools"%s><summary>ツール%s回：%s</summary><ol>%s</ol></details>' % (
-        opened, _n(len(summaries)), _e(" ／ ".join(summaries[:TOOLS_IN_SUMMARY])),
+    return '<details%s%s><summary>ツール%s回：%s</summary><ol>%s</ol></details>' % (
+        _attrs(("class", "tools"), ("data-turn", turn)), opened, _n(len(summaries)),
+        _e(" ／ ".join(summaries[:TOOLS_IN_SUMMARY])),
         "".join("<li>%s</li>" % _marked_text(s, terms) for s in summaries))
 
 

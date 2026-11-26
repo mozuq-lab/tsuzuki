@@ -705,6 +705,20 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
   background: var(--bg-secondary);
 }
 .conv .btns { align-items: center; }
+/* 会話の中の検索の欄（上の検索窓に見た目をそろえる） */
+.conv-q {
+  width: 16em;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .25rem .6rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+.conv-q::placeholder { color: var(--text-tertiary); }
+.conv-q:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .back {
   display: block;
   border: 0;

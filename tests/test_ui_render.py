@@ -34,11 +34,11 @@ EVIL_ID = 'x" onclick="alert(1)'
 EVIL_FILE = '<img src=x onerror=alert(1)>"\'&amp;.md'  # パスの最後の要素にできる形（/ を含まない）
 
 # 断片が出してよいタグと属性（render_markdown が出すタグを含む）。style 属性とイベント属性は出さない
-ALLOWED_TAGS = {"div", "span", "em", "h4", "button", "mark", "br", "details", "summary", "ol", "li", "iframe",
+ALLOWED_TAGS = {"div", "span", "em", "h4", "button", "mark", "br", "details", "summary", "ol", "li", "iframe", "input",
                 "p", "h1", "h2", "h3", "h5", "h6", "ul", "pre", "code", "blockquote", "hr", "table", "thead",
                 "tbody", "tr", "th", "td", "strong", "a"}
 ALLOWED_ATTRS = {"class", "id", "disabled", "open", "sandbox", "src", "title", "href", "rel", "target", "align",
-                 "start", "aria-label"}
+                 "start", "aria-label", "type", "value", "placeholder", "autocomplete", "spellcheck"}
 
 
 class Markup(HTMLParser):
@@ -906,25 +906,28 @@ class UiRenderTest(SafeMarkup, Ledger):
                  ConvItem("assistant", t(2), "引き継ぎ資料を作りました", 1, []),
                  ConvItem("user", t(3), "次へ", 2, [])]
         w = ConversationWindow(S1, items, 0, 2, 2, "ledger")
-        html = frag_conversation(w, title="料理の仕事", terms=["引き継ぎ"], hit_turns=[2, 1])
+        html = frag_conversation(w, title="料理の仕事", terms=["引き継ぎ"], hit_turns=[2, 1], query_text="引き継ぎ")
         self.assertTrue(html.startswith('<div class="conv" data-turns="2,1">'), html)
         self.assertIn('<button class="back" data-action="card" data-session="%s">← 状況カードに戻る</button>' % S1, html)
         self.assertIn("<h4>料理の仕事 ・ 会話</h4>", html)
-        self.assertIn('<span class="hits">一致 2か所</span>', html)
+        self.assertIn('<input class="conv-q" type="search" value="引き継ぎ" placeholder="この会話を探す" '
+                      'aria-label="この会話を探す" autocomplete="off" spellcheck="false">', html)
+        self.assertIn('<span class="hits">一致 2</span>', html)
         self.assertIn('<button class="btn nav" data-action="hit" data-dir="prev" aria-label="前の一致">▲</button>', html)
         self.assertIn('<button class="btn nav" data-action="hit" data-dir="next" aria-label="次の一致">▼</button>', html)
         self.assertIn('<button class="btn" data-action="fold">中央を畳む</button>', html)
         self.assertEqual(texts(html, "who"), ["あなた ・ " + fmt_local(t(0)), "Claude ・ " + fmt_local(t(1)),
                                               "Claude ・ " + fmt_local(t(2)), "あなた ・ " + fmt_local(t(3))])
-        self.assertIn('<div class="turn u" id="turn-1">', html)
-        self.assertIn('<div class="turn u" id="turn-2">', html)
+        self.assertIn('<div class="turn u" id="turn-1" data-turn="1">', html)
+        self.assertIn('<div class="turn a" data-turn="1">', html)
+        self.assertIn('<div class="turn u" id="turn-2" data-turn="2">', html)
         self.assertEqual(html.count('id="turn-'), 2)
         # 発言は Markdown（1つの改行は <br>）
         self.assertIn("<mark>引き継ぎ</mark>資料を<br>\n作って <strong>太字</strong> &lt;b&gt;", html)
-        self.assertIn('<details class="tools" open><summary>ツール5回：Bash（確認） ／ Write docs/h.md ／ Bash（検査）'
+        self.assertIn('<details class="tools" data-turn="1" open><summary>ツール5回：Bash（確認） ／ Write docs/h.md ／ Bash（検査）'
                       '</summary>', html)
         self.assertIn("<li>Write <mark>引き継ぎ</mark>.md</li>", html)
-        self.assertIn('<details class="tools"><summary>ツール1回：Read a.md</summary><ol><li>Read a.md</li></ol>'
+        self.assertIn('<details class="tools" data-turn="1"><summary>ツール1回：Read a.md</summary><ol><li>Read a.md</li></ol>'
                       '</details>', html)
         # 一致がなければ移動のボタンを出さない
         html = frag_conversation(w, title="料理の仕事", terms=[], hit_turns=[])
@@ -963,6 +966,45 @@ class UiRenderTest(SafeMarkup, Ledger):
         self.assertIn("<strong><mark>赤い</mark>旗</strong>", html)
         self.assertIn("<pre class=\"mermaid-src\"><code>graph TD\n赤い旗--&gt;B</code></pre>", html)
         self.assertEqual(html.count("<mark>"), 1)
+
+    def test_marks_only_in_matching_turns(self):
+        items = [ConvItem("user", t(0), "赤い 青い", 1, []), ConvItem("assistant", t(1), "赤いだけ", 2, []),
+                 ConvItem("tools", t(1), "", 2, ["Bash（赤い）"])]
+        html = frag_conversation(ConversationWindow(S1, items, 0, 2, 2, "ledger"), title="x", terms=["赤い", "青い"],
+                                 hit_turns=[1], query_text="赤い 青い")
+        self.assertEqual(html.count("<mark>"), 2)  # ターン1の2語だけ。ターン2には付けない
+        self.assertIn('<details class="tools" data-turn="2">', html)  # 印がないので開かない
+        self.assertIn('<span class="hits">一致 1</span>', html)
+        part = frag_conversation_part(ConversationWindow(S1, items, 0, 2, 2, "ledger"), terms=["赤い", "青い"],
+                                      side="after", hit_turns=[1])
+        self.assertEqual(part.count("<mark>"), 2)
+        # ヘッドレスの記録の会話は、今までどおり語のある所すべてに印を付ける
+        headless = frag_conversation(ConversationWindow(S9, items, 0, 0, 0, "transcript"), title="x",
+                                     terms=["赤い", "青い"], hit_turns=[], query_text="赤い 青い")
+        self.assertEqual(headless.count("<mark>"), 4)
+
+    def test_conversation_search_box(self):
+        w = ConversationWindow(S1, [ConvItem("user", t(0), "a", 1, [])], 0, 1, 1, "ledger")
+        html = frag_conversation(w, title="x", terms=[], hit_turns=[], query_text="")
+        self.assertIn('<input class="conv-q" type="search" value="" placeholder="この会話を探す" '
+                      'aria-label="この会話を探す" autocomplete="off" spellcheck="false">', html)
+        self.assertNotIn('class="hits"', html)
+        none = frag_conversation(w, title="x", terms=["z"], hit_turns=[], query_text="z")
+        self.assertIn('<span class="hits">一致 0</span>', none)
+        self.assertEqual(none.count('data-action="hit"'), 2)
+        self.assertEqual(none.count(" disabled>"), 2)
+        for source in ("transcript", "none"):
+            other = frag_conversation(ConversationWindow(S1, [], 0, 0, 0, source), title="x", terms=["z"],
+                                      hit_turns=[], query_text="z")
+            self.assertNotIn("conv-q", other)
+            self.assertNotIn('data-action="hit"', other)
+
+    def test_conversation_search_box_escapes(self):
+        w = ConversationWindow(S1, [ConvItem("user", t(0), EVIL, 1, [])], 0, 1, 1, "ledger")
+        html = frag_conversation(w, title="x", terms=[EVIL], hit_turns=[1], query_text=EVIL)
+        m = self.assertSafe(html)
+        self.assertEqual([a.get("value") for tag, a in m.tags if a.get("class") == "conv-q"], [EVIL])
+        self.assertIn("<mark>", html)
 
     def test_conversation_offers_add_to_task(self):
         # 会話の画面の見出しにも「タスクに足す」を置く。足せるタスクがなければ出さない
@@ -1016,16 +1058,16 @@ class UiRenderTest(SafeMarkup, Ledger):
         # 読み足した分の断片：前に足す分はボタン（残りがあれば）が先、後ろに足す分は後。見出しは付けない
         items = [ConvItem("user", t(n), "質問%d の引き継ぎ" % n, n, []) for n in range(20, 40)]
         w = ConversationWindow(S1, items, 20, 39, 60, "ledger", before=19, after=21)
-        html = frag_conversation_part(w, terms=["引き継ぎ"], side="before")
+        html = frag_conversation_part(w, terms=["引き継ぎ"], side="before", hit_turns=list(range(20, 40)))
         self.assertTrue(html.startswith('<button class="conv-more" data-action="read-more" data-session="%s" '
                                         'data-dir="before" data-turn="20">前の 19 ターンを読む（残り 19）</button>'
-                                        '<div class="turn u" id="turn-20">' % S1), html[:300])
+                                        '<div class="turn u" id="turn-20" data-turn="20">' % S1), html[:300])
         self.assertNotIn("conv", html.replace("conv-more", ""))  # 会話の枠と見出しは付けない
         self.assertNotIn('data-dir="after"', html)
         self.assertEqual(html.count("<mark>引き継ぎ</mark>"), 20)
         self.assertSafe(html)
         html = frag_conversation_part(w, terms=[], side="after")
-        self.assertTrue(html.startswith('<div class="turn u" id="turn-20">'), html[:100])
+        self.assertTrue(html.startswith('<div class="turn u" id="turn-20" data-turn="20">'), html[:100])
         self.assertTrue(html.endswith('data-dir="after" data-turn="39">後の 20 ターンを読む（残り 21）</button>'))
         self.assertNotIn('data-dir="before"', html)
         done = ConversationWindow(S1, items[:1], 0, 20, 20, "ledger", before=0, after=0)
@@ -1104,7 +1146,7 @@ class FromViewsTest(SafeMarkup, unittest.TestCase):
             self.assertSafe(fragment)
         self.assertIn('<div class="children" id="children-%s"></div>' % s1, fragments[1])
         self.assertIn("子の課題", fragments[2])
-        self.assertIn('<div class="turn u" id="turn-1">', fragments[3])
+        self.assertIn('<div class="turn u" id="turn-1" data-turn="1">', fragments[3])
         self.assertIn("<summary>ツール1回：Write docs/a.md</summary>", fragments[3])
         self.assertIn("子の課題", fragments[4])
         self.assertIn('data-place="%s"' % place_id, fragments[5])
