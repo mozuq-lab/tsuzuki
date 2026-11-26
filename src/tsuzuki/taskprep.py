@@ -15,7 +15,8 @@ from typing import List, Optional, Tuple
 from tsuzuki.doctor import TASK_SKILLS, _additional_dirs_ok, _claude_md_ok
 from tsuzuki.documents import should_scan_place
 from tsuzuki.pathguard import is_inside
-from tsuzuki.export import TEMPLATES, template_text
+from tsuzuki.export import (RULE_HEADING, TEMPLATES, WORK_FILES_HEADING, WORK_FILES_MARK, readme_is_current,
+                            template_text)
 from tsuzuki.privacy import os_error_text
 from tsuzuki.taskstart import git_root
 
@@ -32,10 +33,12 @@ class TaskPrepError(Exception):
 @dataclass(frozen=True)
 class Prep:
     """missing はまだ整っていない項目（README・RULE・SKILLS・ALLOW の順）、allow_file は書き込みの許可を足す
-    settings.local.json、broad は会話を始めるフォルダーが広すぎて（ホーム・ディスクの根）何も置かないこと。"""
+    settings.local.json、broad は会話を始めるフォルダーが広すぎて（ホーム・ディスクの根）何も置かないこと。
+    stale は、あるが今の雛形より古い項目（README・RULE の順。missing にある項目は入れない）。"""
     missing: Tuple[str, ...]
     allow_file: str
     broad: bool = False
+    stale: Tuple[str, ...] = ()
 
 
 def _chain(start: str, stop: Optional[str] = None) -> List[str]:
@@ -83,14 +86,19 @@ def check(start: str, tasks_root: str, *, home: str, claude_dir: str) -> Prep:
         return Prep((), os.path.join(start, SETTINGS_LOCAL), broad=True)
     root = Path(tasks_root)
     claude = Path(claude_dir)
-    missing = []
-    if not os.path.isfile(str(root / "README.md")):  # os.path は読めない場所でも False を返す（Path.is_file は上げる）
+    missing, stale = [], []
+    readme = str(root / "README.md")
+    if not os.path.isfile(readme):  # os.path は読めない場所でも False を返す（Path.is_file は上げる）
         missing.append(README)
+    elif not readme_is_current(_text_or(readme, WORK_FILES_HEADING)):
+        stale.append(README)
     rule_files = [claude / "CLAUDE.md"]
     for d in _all_parents(start):
         rule_files += [Path(d) / "CLAUDE.md", Path(d) / RULE_FILE, Path(d) / ".claude" / "CLAUDE.md"]
     if not any(_claude_md_ok(f, root, home) for f in rule_files):
         missing.append(RULE)
+    elif not any(WORK_FILES_MARK in _text_or(str(f), "") for f in rule_files):
+        stale.append(RULE)
     skill_dirs = [claude / "skills"] + [Path(d) / ".claude" / "skills" for d in _chain(os.path.realpath(start),
                                                                          git_root(start))]
     if not all(any(os.path.isfile(str(d / n / "SKILL.md")) for d in skill_dirs) for n in TASK_SKILLS):
@@ -100,7 +108,16 @@ def check(start: str, tasks_root: str, *, home: str, claude_dir: str) -> Prep:
     if not inside and not any(_additional_dirs_ok(f, root, home) for f in (
             Path(allow_file), Path(start) / ".claude" / "settings.json", claude / "settings.json")):
         missing.append(ALLOW)
-    return Prep(tuple(missing), allow_file)
+    return Prep(tuple(missing), allow_file, stale=tuple(stale))
+
+
+def _text_or(path: str, unreadable: str) -> str:
+    """path の中身（UTF-8 にできないバイトは置き換える）。読めなければ unreadable（読めない物を古いとしないため）。"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return unreadable
 
 
 def _refuse(path: str, claude_dir: Optional[str]) -> None:
@@ -208,6 +225,47 @@ def place_rule(start: str, snippet: str, *, claude_dir: Optional[str] = None) ->
         except OSError as e:
             raise _fail(RULE_FILE, path, e)
     _replace_existing(path, lambda old: _with_rule(old, snippet))
+    return path
+
+
+def add_rule_line(start: str, line: str, *, claude_dir: Optional[str] = None) -> str:
+    """start の CLAUDE.local.md の末尾に、古い決まりの文に足りない1行（line）を足す（なければ作る）。ファイルに
+    決まりの文の見出しがなければ、見出しを付けて足す。もう目印の語があれば書かない。ファイルのパスを返す。"""
+    _need_dir(start, claude_dir)
+    path = os.path.join(start, RULE_FILE)
+    _confine(start, start, claude_dir)
+    if not os.path.lexists(path):
+        try:
+            if _create_new(path, (RULE_HEADING + "\n" + line).encode("utf-8")):
+                return path
+        except OSError as e:
+            raise _fail(RULE_FILE, path, e)
+    if not os.path.islink(path) and WORK_FILES_MARK in _text_or(path, ""):
+        return path
+
+    def build(old: bytes) -> bytes:
+        has_heading = any(l.strip() == RULE_HEADING for l in old.decode("utf-8", errors="replace").splitlines())
+        return _with_rule(old, line if has_heading else RULE_HEADING + "\n" + line)
+
+    _replace_existing(path, build)
+    return path
+
+
+def append_readme_section(tasks_root: str, section: str, *, claude_dir: Optional[str] = None) -> str:
+    """置き場所の README.md の末尾に、雛形の作業用のファイルの節（section）を足す。前からある文は変えない。
+    README.md がないとき、もう節があるとき、リンクや Claude Code の設定ディレクトリの中のときは書かずに断る。"""
+    path = os.path.join(os.path.abspath(tasks_root), "README.md")
+    _refuse(tasks_root, claude_dir)
+    _refuse(path, claude_dir)
+    if not os.path.lexists(path):
+        raise TaskPrepError("README.md がありません: %s" % path)
+
+    def build(old: bytes) -> bytes:
+        if readme_is_current(old.decode("utf-8", errors="replace")):
+            raise TaskPrepError("README.md にはもう作業用のファイルの節があります")
+        return _with_rule(old, section)
+
+    _replace_existing(path, build)
     return path
 
 

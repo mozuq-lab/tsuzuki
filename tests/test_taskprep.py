@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from tsuzuki import taskprep
-from tsuzuki.export import template_text
+from tsuzuki.export import readme_section, rule_line, template_text
 from tsuzuki.pathguard import is_inside
 from tsuzuki.taskprep import TaskPrepError
 from tsuzuki.taskstart import git_root, start_dir
@@ -39,6 +39,117 @@ class Base(unittest.TestCase):
 
     def missing(self, start):
         return taskprep.check(start, self.root, home=self.home, claude_dir=self.claude).missing
+
+    def stale(self, start):
+        return taskprep.check(start, self.root, home=self.home, claude_dir=self.claude).stale
+
+
+class StaleTest(Base):
+    def line(self):
+        return rule_line(tasks_root_display="~/tasks")
+
+    def section(self):
+        return readme_section(tasks_root_display="~/tasks")
+
+    def test_readme_without_the_section_is_stale_not_missing(self):
+        self.write(os.path.join(self.root, "README.md"), "# 古い決まり\n")
+        c = taskprep.check(self.repo, self.root, home=self.home, claude_dir=self.claude)
+        self.assertNotIn("readme", c.missing)
+        self.assertEqual(c.stale, ("readme",))
+        self.write(os.path.join(self.root, "README.md"), "# 決まり\n\n## 作業用のファイル\n")
+        self.assertEqual(self.stale(self.repo), ())
+
+    def test_an_unreadable_readme_is_not_called_stale(self):
+        readme = os.path.join(self.root, "README.md")
+        self.write(readme, "# 古い決まり\n")
+        os.chmod(readme, 0)
+        self.addCleanup(os.chmod, readme, 0o644)
+        self.assertEqual(self.stale(self.repo), ())
+
+    def test_rule_without_the_line_is_stale_wherever_the_line_lives(self):
+        self.write(os.path.join(self.claude, "CLAUDE.md"), "~/tasks/README.md を読む\n")
+        self.assertNotIn("rule", self.missing(self.repo))
+        self.assertIn("rule", self.stale(self.repo))
+        self.write(os.path.join(self.repo, "CLAUDE.local.md"), self.line())  # 1行が別のファイルにあってもよい
+        self.assertNotIn("rule", self.stale(self.repo))
+
+    def test_missing_rule_is_not_also_stale(self):
+        self.assertIn("rule", self.missing(self.repo))
+        self.assertNotIn("rule", self.stale(self.repo))
+
+    def test_add_rule_line_appends_only_the_line_under_the_existing_heading(self):
+        path = os.path.join(self.repo, "CLAUDE.local.md")
+        old = "## タスクと資料\n- ~/tasks/README.md を読む\n"
+        self.write(path, old)
+        self.assertEqual(taskprep.add_rule_line(self.repo, self.line(), claude_dir=self.claude), path)
+        self.assertEqual(self.read(path).decode("utf-8"), old + "\n" + self.line())
+        self.assertNotIn("rule", self.stale(self.repo))
+
+    def test_add_rule_line_brings_the_heading_when_the_file_lacks_it(self):
+        glob = os.path.join(self.claude, "CLAUDE.md")
+        self.write(glob, "~/tasks/README.md を読む\n")
+        path = taskprep.add_rule_line(self.repo, self.line(), claude_dir=self.claude)
+        self.assertEqual(self.read(path).decode("utf-8"), "## タスクと資料\n" + self.line())
+        self.assertNotIn("rule", self.stale(self.repo))
+        self.assertEqual(self.read(glob).decode("utf-8"), "~/tasks/README.md を読む\n")
+
+    def test_add_rule_line_twice_adds_once(self):
+        taskprep.add_rule_line(self.repo, self.line(), claude_dir=self.claude)
+        first = self.read(os.path.join(self.repo, "CLAUDE.local.md"))
+        taskprep.add_rule_line(self.repo, self.line(), claude_dir=self.claude)
+        self.assertEqual(self.read(os.path.join(self.repo, "CLAUDE.local.md")), first)
+
+    def test_add_rule_line_keeps_crlf_and_refuses_links_and_the_claude_dir(self):
+        path = os.path.join(self.repo, "CLAUDE.local.md")
+        self.write(path, "## タスクと資料\r\nx\r\n".encode("utf-8"), binary=True)
+        taskprep.add_rule_line(self.repo, self.line(), claude_dir=self.claude)
+        data = self.read(path)
+        self.assertTrue(data.startswith("## タスクと資料\r\nx\r\n\r\n- ".encode("utf-8")))
+        self.assertEqual(data.count(b"\n"), data.count(b"\r\n"))
+        os.unlink(path)
+        target = os.path.join(self.top, "elsewhere.md")
+        self.write(target, "x")
+        os.symlink(target, path)
+        with self.assertRaises(TaskPrepError):
+            taskprep.add_rule_line(self.repo, self.line(), claude_dir=self.claude)
+        self.assertEqual(self.read(target), b"x")
+        with self.assertRaises(TaskPrepError):
+            taskprep.add_rule_line(self.claude, self.line(), claude_dir=self.claude)
+
+    def test_readme_section_is_appended_once_and_old_bytes_stay(self):
+        readme = os.path.join(self.root, "README.md")
+        for old, tail in ((b"# old\nx\n", b"\n"), (b"# old\nx", b"\n\n"), (b"# old\n\n", b""),
+                          (b"# old\r\nx\r\n", b"\r\n")):
+            with self.subTest(old=old):
+                self.write(readme, old, binary=True)
+                os.chmod(readme, 0o600)
+                self.assertEqual(taskprep.append_readme_section(self.root, self.section(), claude_dir=self.claude),
+                                 readme)
+                data = self.read(readme)
+                nl = b"\r\n" if b"\r\n" in old else b"\n"
+                self.assertEqual(data, old + tail + self.section().encode("utf-8").replace(b"\n", nl))
+                self.assertEqual(stat.S_IMODE(os.stat(readme).st_mode), 0o600)
+                self.assertEqual(self.stale(self.repo), ())
+                with self.assertRaises(TaskPrepError):
+                    taskprep.append_readme_section(self.root, self.section(), claude_dir=self.claude)
+                self.assertEqual(self.read(readme), data)
+
+    def test_readme_section_refuses_a_missing_file_a_link_and_the_claude_dir(self):
+        readme = os.path.join(self.root, "README.md")
+        with self.assertRaises(TaskPrepError) as e:
+            taskprep.append_readme_section(self.root, self.section(), claude_dir=self.claude)
+        self.assertEqual(str(e.exception), "README.md がありません: %s" % readme)
+        target = os.path.join(self.top, "real-readme.md")
+        self.write(target, "x")
+        os.symlink(target, readme)
+        with self.assertRaises(TaskPrepError):
+            taskprep.append_readme_section(self.root, self.section(), claude_dir=self.claude)
+        self.assertEqual(self.read(target), b"x")
+        inside = os.path.join(self.claude, "tasks")
+        self.write(os.path.join(inside, "README.md"), "x")
+        with self.assertRaises(TaskPrepError):
+            taskprep.append_readme_section(inside, self.section(), claude_dir=self.claude)
+        self.assertEqual(self.read(os.path.join(inside, "README.md")), b"x")
 
 
 class StartDirTest(Base):
