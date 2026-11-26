@@ -1168,6 +1168,16 @@ class TaskServerTest(ServerCase):
                          403)
         self.assertEqual(len(self.calls), n)
 
+    def test_a_linked_stale_readme_is_refused_with_the_link_as_the_reason(self):
+        self.app.cfg = Config(tasks_root=self.tasks_root)
+        target = os.path.join(self.root, "real-readme.md")
+        write_file(target, "# 古い決まり\n")
+        os.symlink(target, os.path.join(self.tasks_root, "README.md"))
+        r = self.action("/api/tasks-readme", {"mode": "section"}).json()
+        self.assertFalse(r["ok"])
+        self.assertIn("シンボリックリンクなので書きません", r["message"])
+        self.assertEqual(self.text(target), "# 古い決まり\n")
+
     def test_task_card_lists_work_files(self):
         path = os.path.join(self.tasks_root, "2026-11-20-a", "check.sql")
         write_file(path, "select 1;\n")
@@ -1186,13 +1196,19 @@ class TaskServerTest(ServerCase):
         write_file(local, old)
         card, names, whats, summary = self.card_prep()
         self.assertEqual(names[:2], ["決まりのファイル（古い）", "CLAUDE.local.md の決まり（古い）"])
-        r = self.action("/api/tasks-readme", {}).json()
+        self.assertIn('data-action="tasks-readme" data-mode="section"', card)
+        r = self.action("/api/tasks-readme", {"mode": "section"}).json()
         self.assertEqual((r["ok"], r["message"]),
                          (True, "タスクの決まり（README.md）に、作業用のファイルの節を足しました: %s/README.md" % shown))
         self.assertEqual(self.text(readme), "# 古い決まり\n\n" + readme_section(tasks_root_display=shown))
-        again = self.action("/api/tasks-readme", {}).json()
-        self.assertFalse(again["ok"])
-        self.assertIn("README.md はもうあります", again["message"])
+        # 2つ目の窓から押しても書かず、成功として返す（画面がカードを読み直し、「古い」が消える）
+        again = self.action("/api/tasks-readme", {"mode": "section"}).json()
+        self.assertEqual((again["ok"], again["message"]), (True, "もう足してあります"))
+        self.assertEqual(self.text(readme), "# 古い決まり\n\n" + readme_section(tasks_root_display=shown))
+        # 「置く」（mode なし）は今までどおり、あれば上書きせずに断る
+        placed = self.action("/api/tasks-readme", {}).json()
+        self.assertFalse(placed["ok"])
+        self.assertIn("README.md はもうあります", placed["message"])
         r = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
         self.assertEqual((r["ok"], r["message"]), (True, "%s/CLAUDE.local.md に作業用のファイルの1行を足しました" % self.proj))
         self.assertEqual(self.text(local), old + "\n" + rule_line(tasks_root_display=shown))

@@ -86,7 +86,7 @@ def _card_prep(prep: Optional[CardPrep]) -> str:
     }
     stale = {
         CARD_README: ("決まりのファイル", "%s に「作業用のファイル」の節がありません。末尾に足します" % prep.readme,
-                      _button("足す", "btn", ("data-action", "tasks-readme"))),
+                      _button("足す", "btn", ("data-action", "tasks-readme"), ("data-mode", "section"))),
         CARD_RULE: ("CLAUDE.local.md の決まり", "%s に、作業用のファイルの1行を足します" % prep.rule_file,
                     _button("足す", "btn", ("data-action", "task-prep"), ("data-item", "rule"))
                     + _button("1行をコピー", "btn", ("data-action", "copy"), ("data-copy", prep.rule_line))),

@@ -276,7 +276,7 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertEqual(re.findall(r'<div class="prep-what">([^<]*)</div>', html)[:2], [
             "~/tasks/README.md に「作業用のファイル」の節がありません。末尾に足します",
             "~/dev/app/CLAUDE.local.md に、作業用のファイルの1行を足します"])
-        self.assertEqual(len(m.tags_with("data-action", "tasks-readme")), 1)
+        self.assertEqual([a.get("data-mode") for _, a in m.tags_with("data-action", "tasks-readme")], ["section"])
         self.assertEqual([a["data-item"] for _, a in m.tags_with("data-action", "task-prep")], ["rule", "skills"])
         self.assertEqual(re.findall(r'<div class="prep-btns">(.*?)</div>', html)[1],
                          '<button class="btn" data-action="task-prep" data-item="rule">足す</button>'

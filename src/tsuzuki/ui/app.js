@@ -1116,7 +1116,8 @@ async function placeTasksReadme(button) {
   button.disabled = true;
   let answer;
   try {
-    answer = await postWrite("/api/tasks-readme", {});
+    // 古い README の「足す」は mode に section を付け、節だけを末尾に足してもらう（「置く」は付けない）
+    answer = await postWrite("/api/tasks-readme", button.dataset.mode ? { mode: button.dataset.mode } : {});
   } finally {
     writing = false;
     button.disabled = false;

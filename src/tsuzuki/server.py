@@ -118,6 +118,7 @@ PREP_SKILLS_PLACED = "%s にスキルを置きました"
 PREP_ALLOW_PLACED = "%s の additionalDirectories にタスクの置き場所を足しました"
 PREP_RULE_LINE_ADDED = "%s に作業用のファイルの1行を足しました"
 README_SECTION_ADDED = "タスクの決まり（README.md）に、作業用のファイルの節を足しました: %s"
+README_SECTION_DONE = "もう足してあります"
 PREP_DONE = "もう整っています"
 BAD_PREP_ITEM = "準備の項目が正しくありません"
 UNKNOWN_TASK = "台帳にないタスクです"
@@ -1128,8 +1129,10 @@ def _api_task_link(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _api_tasks_readme(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
-    """置き場所の直下に、雛形から README.md を置く（今あるものは上書きしない）。README.md はタスクではないので、
-    台帳の読み直しはいらない。"""
+    """置き場所の直下に、雛形から README.md を置く（今あるものは上書きしない）。mode が section（古い README の
+    「足す」）なら、作業用のファイルの節だけを末尾に足す。もう足してあれば書かずに成功として返す（2つ目の窓から
+    押しても、画面がカードを読み直せるように）。README.md はタスクではないので、台帳の読み直しはいらない。"""
+    mode = _task_text(data, "mode", "")
     with update_lock(app.ledger_dir):
         root = app.tasks_root
         if root is None:
@@ -1137,9 +1140,11 @@ def _api_tasks_readme(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
         shown = display_path(root, app.home)
         readme = root / "README.md"
         try:
-            if os.path.isfile(str(readme)) and not os.path.islink(str(readme)) and not readme_is_current(
-                    readme.read_text(encoding="utf-8", errors="replace")):
-                # 古い README には、作業用のファイルの節だけを末尾に足す（前からある文は変えない）
+            if mode == "section":
+                # 前からある文は変えない。リンク・ないとき・設定ディレクトリの中は、append_readme_section が理由を返す
+                if os.path.isfile(str(readme)) and readme_is_current(readme.read_text(encoding="utf-8",
+                                                                                        errors="replace")):
+                    return _task_done(README_SECTION_DONE)
                 taskprep.append_readme_section(str(root), readme_section(tasks_root_display=shown),
                                                claude_dir=str(app.claude_dir))
                 return _task_done(README_SECTION_ADDED % (shown + "/README.md"))

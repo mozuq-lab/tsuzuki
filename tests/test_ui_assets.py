@@ -216,6 +216,8 @@ class UiAssetsTest(unittest.TestCase):
         place = _function(js, "placeTasksReadme")
         self.assertIn("busyWriting()", place)
         self.assertIn('postWrite("/api/tasks-readme"', place)
+        # 古い README の「足す」は、ボタンの data-mode（section）を送る。「置く」は送らない
+        self.assertIn('postWrite("/api/tasks-readme", button.dataset.mode ? { mode: button.dataset.mode } : {})', place)
         self.assertIn("toast(answer.message)", place)
         self.assertNotIn("panes.left", place)
         self.assertIn("reloadTasks()", place)
