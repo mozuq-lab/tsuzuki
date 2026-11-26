@@ -10,13 +10,25 @@ from pathlib import Path
 from unittest import mock
 
 from tsuzuki import cli
-from tsuzuki.export import TEMPLATES, display_path, export_templates, template_text
+from tsuzuki.export import (TEMPLATES, display_path, export_templates, readme_is_current, readme_section, rule_line,
+                            template_text)
 
+RULE_LINE = ("- コミットしない作業用のファイル（テスト用の SQL、確かめ用のスクリプト、データ、実行結果）は、一時領域ではなく、"
+             "その会話のタスクのフォルダーに置く（タスクが分からなければ、これまでどおり）。\n")
 SNIPPET = (
     "## タスクと資料\n"
     "- タスクの資料は ~/tasks/<タスクのフォルダー>/ に置く。決まりは ~/tasks/README.md にあるので、資料や引き継ぎを書く前に読む。\n"
     "- 設計書や計画を書くスキル（superpowers など）の既定の置き場所より、この決まりを優先する。\n"
-    "- タスクの状況（現在地・次の一手など）は、自動メモリではなく、そのタスクの task.md に書く。\n")
+    "- タスクの状況（現在地・次の一手など）は、自動メモリではなく、そのタスクの task.md に書く。\n"
+    + RULE_LINE)
+README_SECTION = (
+    "## 作業用のファイル\n\n"
+    "- コミットしない作業用のファイル（テスト用の SQL、確かめ用のスクリプト、サンプルのデータ、実行結果、ログ、画面の写し）は、"
+    "その会話のタスクのフォルダーに置く。一時領域（/tmp など）には置かない\n"
+    "- コミットする物（ソースコード、コミットするテスト、設定）は、これまでどおりリポジトリに置く\n"
+    "- 増えたらフォルダーを分けてよい（例：`sql/`・`out/`）。`.` で始まる名前と `build` はカードに並ばないので使わない\n"
+    "- 名前の先頭に資料の種類の語（`research-` など）を付けない\n"
+    "- その場かぎりの中間の出力と、タスクが分からない会話のファイルは、これまでどおりでよい\n")
 EXPORTED = ["tasks/README.md", "CLAUDE.md-snippet.md", "skills/task-start/SKILL.md", "skills/task-handoff/SKILL.md"]
 
 
@@ -24,14 +36,24 @@ class TemplateTextTest(unittest.TestCase):
     def test_snippet_is_spec_text(self):
         self.assertEqual(template_text("templates/claude-md-snippet.md", tasks_root_display="~/tasks"), SNIPPET)
         self.assertLessEqual(len(SNIPPET), 300)
+        self.assertEqual(rule_line(tasks_root_display="~/tasks"), RULE_LINE)
 
     def test_readme_limits_and_contents(self):
         text = template_text("templates/tasks-README.md", tasks_root_display="~/tasks")
-        self.assertLessEqual(len(text), 2000)
+        self.assertLessEqual(len(text), 2300)
+        self.assertTrue(text.endswith("\n\n" + README_SECTION))
+        self.assertEqual(readme_section(tasks_root_display="~/tasks"), README_SECTION)
         for word in ("YYYY-MM-DD-", "shared/", "task.md", "research-", "design-", "plan-", "review-", "notes-",
                      "目的", "現在地", "次の一手", "待っていること", "決めたこと", "資料",
                      "チケット", "調査", "調整", "実装", "PR", "修正", "完了"):
             self.assertIn(word, text)
+
+    def test_readme_is_current(self):
+        self.assertTrue(readme_is_current(template_text("templates/tasks-README.md", tasks_root_display="~/tasks")))
+        self.assertTrue(readme_is_current("前\n## 作業用のファイル  \r\n"))
+        for text in ("", "# 決まり\n", "### 作業用のファイル\n", "作業用のファイルは置く\n", "## 作業用のファイルの話\n"):
+            with self.subTest(text=text):
+                self.assertFalse(readme_is_current(text))
 
     def test_skills(self):
         for name, words in (("task-start", ("tsuzuki task new", "gh issue view", "gh issue create", "@")),

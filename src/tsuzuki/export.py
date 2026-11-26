@@ -19,6 +19,13 @@ TEMPLATES: Tuple[Tuple[str, str], ...] = (
 TASKS_ROOT_IN_TEMPLATES = "~/tasks"  # 雛形の中のタスクの置き場所。書き出すときに設定の置き場所に置き換える
 _SNIPPET = "CLAUDE.md-snippet.md"
 _TASKS_DIR = "tasks/"
+_README_TEMPLATE = "templates/tasks-README.md"
+_SNIPPET_TEMPLATE = "templates/claude-md-snippet.md"
+
+# 置いた決まりが今の雛形に追いついているかの目印。決まりを変えたときは、そのときの目印を足す
+WORK_FILES_HEADING = "## 作業用のファイル"  # README の目印（この見出しの行）
+WORK_FILES_MARK = "作業用のファイル"  # 決まりの文の目印（この語）
+RULE_HEADING = "## タスクと資料"  # 決まりの文の見出し
 
 
 def display_path(path: Path, home: str) -> str:
@@ -35,6 +42,30 @@ def template_text(name: str, *, tasks_root_display: str) -> str:
     if data is None:  # get_data を持たない読み込み方。Tsuzuki の配り方（ファイルと zipapp）では起きない
         raise FileNotFoundError("雛形を読めません: %s" % name)
     return data.decode("utf-8").replace(TASKS_ROOT_IN_TEMPLATES, tasks_root_display)
+
+
+def readme_is_current(text: str) -> bool:
+    """README に、作業用のファイルの節の見出し（前後の空白を除いた行が WORK_FILES_HEADING）があるか。"""
+    return any(line.strip() == WORK_FILES_HEADING for line in text.splitlines())
+
+
+def readme_section(*, tasks_root_display: str) -> str:
+    """README の雛形の、作業用のファイルの節（見出しの行から最後まで）。古い README の末尾に足す分。"""
+    text = template_text(_README_TEMPLATE, tasks_root_display=tasks_root_display)
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.strip() == WORK_FILES_HEADING:
+            return "".join(lines[i:])
+    raise ValueError("README の雛形に %s の節がありません" % WORK_FILES_HEADING)
+
+
+def rule_line(*, tasks_root_display: str) -> str:
+    """決まりの文の雛形のうち、作業用のファイルの1行（最後の改行を含む）。古い決まりの文に足す分。"""
+    text = template_text(_SNIPPET_TEMPLATE, tasks_root_display=tasks_root_display)
+    for line in text.splitlines(keepends=True):
+        if WORK_FILES_MARK in line:
+            return line
+    raise ValueError("決まりの文の雛形に %s の行がありません" % WORK_FILES_MARK)
 
 
 def placement(rel: str, *, tasks_root_display: str, claude_dir_display: str) -> str:
