@@ -27,7 +27,8 @@ ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans
            "new-task", "task-open", "task-link", "task-trash", "task-copy-doc", "form-cancel", "ticket-url-edit",
            "tasks-root-edit", "tasks-readme", "task-prep", "open-task"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
-HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
+HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status",
+             "cq"]
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く
 FRAGMENT_CLASSES = (
     "a", "after", "b", "back", "badge", "body", "btn", "btns", "card", "child", "children", "col", "cols", "conv",
@@ -186,6 +187,38 @@ class UiAssetsTest(unittest.TestCase):
         # 見た目は class と hidden で切り替える（style 属性は CSP で止まる）
         self.assertNotIn(".style", js)
         self.assertNotIn("setAttribute(\"style\"", js)
+
+    def test_conversation_search_uses_its_own_key(self):
+        js = _asset("app.js")
+        self.assertIn('"cq"', js[js.index("const HASH_KEYS"):js.index("];", js.index("const HASH_KEYS"))])
+        url = _function(js, "detailUrl")
+        self.assertIn("query({ turn: st.t, q: st.cq })", url)
+        self.assertIn("q: state.cq", _function(js, "readMore"))
+        # 会話の中の検索は、上の検索窓の q と左の一覧を変えない
+        search = _function(js, "runConversationSearch")
+        self.assertIn("go({ cq:", search)
+        self.assertNotIn("q: ", search.replace("cq:", ""))
+        # 会話を開くときは、上の検索窓の語を会話の中の検索の語にする
+        self.assertIn('"cq" in changes', _function(js, "go"))
+        self.assertIn("if (!st.c) st.cq = \"\";", _function(js, "normalize"))
+
+    def test_conversation_search_keeps_typing(self):
+        js = _asset("app.js")
+        self.assertIn("isComposing", _function(js, "onConversationInput"))
+        self.assertIn("compositionend", js)
+        self.assertIn("setSelectionRange", _function(js, "setupDetail") + _function(js, "restoreConversationBox"))
+        load = js[js.index("function load(name, url, force)"):js.index("function failPane")]
+        self.assertLess(load.index("conversationBoxState()"), load.index("pane.node.innerHTML = text"))
+        self.assertLess(load.index("pane.node.innerHTML = text"), load.index("restoreConversationBox("))
+
+    def test_conversation_moves_across_unloaded_hits(self):
+        js = _asset("app.js")
+        stops = _function(js, "conversationStops")
+        self.assertIn("hitTurns", stops)
+        self.assertIn('querySelectorAll("mark")', stops)
+        move = _function(js, "moveInConversation")
+        self.assertIn("pendingStop", move)
+        self.assertIn("go({ t: String(", move)
 
     def test_script_places_the_task_prep_and_keeps_the_card_prep_open(self):
         js = _asset("app.js")
@@ -365,7 +398,7 @@ class UiAssetsTest(unittest.TestCase):
             self.assertIn(part, body)
         self.assertLess(body.index("const top = "), body.index("insertAdjacentHTML"))
         marks = _function(js, "refreshMarks")
-        for part in ("const current = marks[markIndex] || null;", 'marks = Array.from(conv.querySelectorAll("mark"));',
+        for part in ("const current = marks[markIndex] || null;", "marks = conversationStops(conv);",
                      "const index = current ? marks.indexOf(current) : -1;", "showMark(index < 0 ? 0 : index, false);"):
             self.assertIn(part, marks)
         css = _asset("app.css")

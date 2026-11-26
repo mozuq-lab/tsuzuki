@@ -6,7 +6,8 @@
 
 // qdays・role・order は検索の期間・発言者・並び順（一覧の期間 days とは別。検索の既定は、すべて・新しい順）。
 // task と status はタスクの表示の、選んだタスク（フォルダー名）と状況の絞り込み（t は会話のターンに使っている）
-const HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"];
+const HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status",
+  "cq"];
 const VIEWS = ["tasks", "sessions", "docs"];
 const STATUSES = ["", "done", "all"]; // 状況の絞り込み。"" は進行中と待ち（既定）
 const NO_PLACE = "0"; // タスクの表示の「場所なし」（台帳の場所の ID は 1 から）
@@ -136,8 +137,12 @@ let toastTimer = 0;
 let lastUpdate; // /api/status の last_update_at（変わったら一覧を取り直す）
 let lastStatus = null;
 let reading = false; // 会話を読むときに中央の列を畳んでいるか
-let marks = []; // 会話の中の <mark>（検索語の印）
+let marks = []; // 会話の止まる所：一致したターンの <mark>（印のないターンは、そのターンの最初の要素）
 let markIndex = -1;
+let hitTurns = []; // 会話の中の検索で一致したターン（古い順。.conv の data-turns）
+let pendingStop = ""; // 一致したターンの周りを出し直したあとに止まる所："first"（そのターンの最初）か "last"（最後）
+let scrollToStop = false; // 出し直したあと、止まる所を画面の真ん中へ送るか（会話の中を探したときと、移ったとき）
+let convTimer = 0;
 let revealedKey = ""; // 一覧で最後に見える所へ動かした選択
 const expanded = new Set(); // 子の一覧を開いている親のセッション
 let writing = false; // タスクに書く操作を送っている途中（続けて押しても、2つ目は送らない）
@@ -179,6 +184,8 @@ function normalize(raw) {
   if (st.v !== "tasks" && st.p === NO_PLACE) st.p = ""; // 「場所なし」はタスクの表示だけ
   st.c = st.c === "1" && st.s ? "1" : "";
   if (!st.c) st.t = "";
+  st.cq = st.cq.trim(); // 会話の中の検索の語（会話を開いているときだけ）
+  if (!st.c) st.cq = "";
   if (!st.q) st.i = "";
   st.days = DAY_CHOICES.includes(st.days) ? st.days : DEFAULT_DAYS;
   st.h = st.h === "1" || st.h === "0" ? st.h : HEADLESS_DEFAULT;
@@ -203,6 +210,10 @@ function toHash(st) {
 
 // 状態を変える。push はほかの表示へ移るとき（戻る操作で戻れる）、それ以外はペインの中の移動として置き換える
 function go(changes, push) {
+  // 会話を開くときは、上の検索窓の語を会話の中の検索の語にする（検索から開くと、一致に印が付く）
+  if (changes.c === "1" && !state.c && !("cq" in changes)) {
+    changes = Object.assign({ cq: "q" in changes ? changes.q : state.q }, changes);
+  }
   const next = normalize(Object.assign({}, state, changes));
   const url = toHash(next);
   if (url !== toHash(state)) {
@@ -357,7 +368,7 @@ function detailUrl(st) {
   if (st.v === "tasks") return st.task ? "/frag/task/" + encodeURIComponent(st.task) : null;
   if (st.v === "docs") return null;
   if (st.s && st.c) {
-    return "/frag/conversation/" + st.s + query({ turn: st.t, turns: rowTurns(st.s), q: st.q });
+    return "/frag/conversation/" + st.s + query({ turn: st.t, q: st.cq });
   }
   if (st.s) {
     const turns = rowTurns(st.s);
@@ -389,8 +400,10 @@ function load(name, url, force) {
       // 取り直しの入れ替えで、左の列の入力欄（開いているもの）の入力を消さない。閉じたあとの取り直しで追いつく
       if (force && name === "left" && pane.node.querySelector("form:not([hidden])")) return true;
       const prepOpen = name === "detail" && force && pane.node.querySelector("details.prep[open]") !== null;
+      const typing = name === "detail" ? conversationBoxState() : null; // 会話の中の検索の欄に打っている途中
       pane.html = text;
       pane.node.innerHTML = text; // 断片はサーバーがエスケープ済み
+      if (typing) restoreConversationBox(typing);
       const prep = prepOpen ? pane.node.querySelector("details.prep") : null;
       if (prep) prep.open = true; // 開いていた「Claude で使う準備」は、取り直しの入れ替えでも開いたままにする
       afterSwap[name](Boolean(force));
@@ -712,15 +725,105 @@ function moveHit(button) {
     const total = (card.dataset.turns || "").split(",").filter(Boolean).length;
     const index = Math.min(Math.max(Number(card.dataset.index || 0) + step, 0), Math.max(total - 1, 0));
     go({ i: index ? String(index) : "" }, false);
-  } else if (marks.length) {
-    showMark(Math.min(Math.max(markIndex + step, 0), marks.length - 1), true);
+  } else if (ui.detail.querySelector(".conv")) {
+    moveInConversation(step);
   }
+}
+
+// 会話の止まる所を1つ移る。読み込んである止まる所の端なら、その向きの次の一致したターンの周りを出し直す
+function moveInConversation(step) {
+  const next = markIndex + step;
+  if (next >= 0 && next < marks.length) {
+    showMark(next, true);
+    return;
+  }
+  const current = marks[markIndex];
+  const turn = current ? stopTurn(current) : null;
+  const later = hitTurns.filter((t) => turn === null || t > turn);
+  const earlier = hitTurns.filter((t) => turn === null || t < turn);
+  const target = step > 0 ? later[0] : earlier[earlier.length - 1];
+  if (target === undefined) return;
+  pendingStop = step > 0 ? "first" : "last";
+  scrollToStop = true;
+  go({ t: String(target) }, false);
+}
+
+// 止まる所の並び：読み込んである一致したターンを古い順に、そのターンの印を文書の順に（印がなければ最初の要素）
+function conversationStops(conv) {
+  const stops = [];
+  for (const turn of hitTurns) {
+    const parts = Array.from(conv.querySelectorAll('[data-turn="' + turn + '"]'));
+    if (!parts.length) continue;
+    const found = [];
+    for (const part of parts) found.push(...part.querySelectorAll("mark"));
+    if (found.length) stops.push(...found);
+    else stops.push(parts[0]);
+  }
+  return stops;
+}
+
+function stopTurn(stop) {
+  const part = stop.closest("[data-turn]");
+  return part ? Number(part.dataset.turn) : null;
+}
+
+// 右のペインの上の端に見えている発言のターン（会話の中を探すとき、そこから下の一致へ移るため）
+function currentTurn() {
+  const head = ui.detail.querySelector(".conv .dh");
+  const top = (head ? head.getBoundingClientRect().bottom : ui.detail.getBoundingClientRect().top) + 1;
+  for (const part of ui.detail.querySelectorAll(".conv [data-turn]")) {
+    if (part.getBoundingClientRect().bottom > top) return part.dataset.turn;
+  }
+  return state.t;
+}
+
+// 会話の中の検索の欄：打つのが止まって少したったら探す（日本語の変換中は、確定してから）
+function onConversationInput(event) {
+  if (!event.target.matches || !event.target.matches(".conv-q")) return;
+  if (event.isComposing) return;
+  scheduleConversationSearch();
+}
+
+function scheduleConversationSearch() {
+  clearTimeout(convTimer);
+  convTimer = setTimeout(runConversationSearch, SEARCH_DELAY_MS);
+}
+
+// 会話の中を探す。上の検索窓の q と左の一覧は変えない。今読んでいる所から下の一致へ移る
+function runConversationSearch() {
+  clearTimeout(convTimer);
+  const box = ui.detail.querySelector(".conv-q");
+  if (!box) return;
+  const value = box.value.trim();
+  if (value === state.cq) return;
+  scrollToStop = true;
+  go({ cq: value, t: currentTurn() || "" }, false);
+}
+
+// 断片を入れ替える前の、会話の中の検索の欄（焦点があるときだけ）。入れ替えたあと restoreConversationBox で戻す
+function conversationBoxState() {
+  const box = ui.detail.querySelector(".conv-q");
+  if (!box || document.activeElement !== box) return null;
+  const back = ui.detail.querySelector(".conv .back");
+  return { session: back ? back.dataset.session : "", value: box.value, start: box.selectionStart,
+    end: box.selectionEnd };
+}
+
+// 打っていた途中の欄を戻す（同じ会話のときだけ）。待つ間に打ち足していれば、もう一度探す
+function restoreConversationBox(typing) {
+  const box = ui.detail.querySelector(".conv-q");
+  const back = ui.detail.querySelector(".conv .back");
+  if (!box || !back || back.dataset.session !== typing.session) return;
+  box.value = typing.value;
+  box.focus();
+  box.setSelectionRange(typing.start, typing.end);
+  if (typing.value.trim() !== state.cq) scheduleConversationSearch();
 }
 
 // 長い会話の前後を読み足す。ボタンの所に隣の窓を入れる。前に足すときは、読んでいた発言が
 // 画面の同じ高さに残るようにする（ブラウザが自分で保っていれば、ずれは 0 なので動かさない）
 async function readMore(button) {
-  const params = { q: state.q };
+  const params = { q: state.cq };
   if (button.dataset.offset) params.offset = button.dataset.offset;
   else params[button.dataset.dir === "before" ? "before" : "after"] = button.dataset.turn;
   button.disabled = true;
@@ -744,7 +847,7 @@ function refreshMarks() {
   const conv = ui.detail.querySelector(".conv");
   if (!conv) return;
   const current = marks[markIndex] || null;
-  marks = Array.from(conv.querySelectorAll("mark"));
+  marks = conversationStops(conv);
   const counter = conv.querySelector(".hits");
   if (!counter || !marks.length) return;
   counter.hidden = false;
@@ -759,6 +862,11 @@ function setupDetail() {
   setupMermaid();
   marks = [];
   markIndex = -1;
+  hitTurns = [];
+  const wanted = pendingStop;
+  const scroll = scrollToStop;
+  pendingStop = "";
+  scrollToStop = false;
   for (const toggle of ui.detail.querySelectorAll('.more[data-action="orphans"]:not([data-offset])')) {
     toggle.setAttribute("aria-expanded", "false");
   }
@@ -776,31 +884,67 @@ function setupDetail() {
   const counter = conv.querySelector(".hits");
   const nav = conv.querySelectorAll('[data-action="hit"]');
   if (!counter && !nav.length) return;
-  marks = Array.from(conv.querySelectorAll("mark"));
+  hitTurns = (conv.dataset.turns || "").split(",").filter(Boolean).map(Number);
+  marks = conversationStops(conv);
+  const from = Number(state.t || 0);
+  const loaded = (turn) => conv.querySelector('[data-turn="' + turn + '"]') !== null;
   if (!marks.length) {
-    if (counter) counter.hidden = true;
+    // 読み込んである所に一致がない。一致があれば、state.t から下（なければ上）の一致の周りを出し直す
+    const below = hitTurns.find((t) => t >= from);
+    const target = below !== undefined ? below : hitTurns[hitTurns.length - 1];
+    if (target !== undefined && !loaded(target) && !wanted) {
+      pendingStop = "first";
+      scrollToStop = true;
+      go({ t: String(target) }, false);
+      return;
+    }
     for (const button of nav) button.disabled = true;
     return;
   }
-  const following = anchor
-    ? marks.findIndex((mark) => anchor.compareDocumentPosition(mark) & Node.DOCUMENT_POSITION_FOLLOWING)
-    : 0;
-  showMark(following < 0 ? marks.length - 1 : following, false);
+  let index = -1;
+  if (wanted && state.t) {
+    // 一致したターンの周りを出し直したあと：そのターンの最初か最後の止まる所
+    const inTurn = marks.map((stop, i) => (stopTurn(stop) === from ? i : -1)).filter((i) => i >= 0);
+    if (inTurn.length) index = wanted === "first" ? inTurn[0] : inTurn[inTurn.length - 1];
+  }
+  if (index < 0) {
+    // state.t のターンから下で最初の止まる所。下になければ、読み込んでいない下の一致へ。それもなければ上で最後
+    index = anchor
+      ? marks.findIndex((stop) => stop === anchor
+        || (anchor.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING))
+      : 0;
+    if (index < 0) {
+      const below = hitTurns.find((t) => t >= from && !loaded(t));
+      if (below !== undefined && !wanted) {
+        pendingStop = "first";
+        scrollToStop = true;
+        go({ t: String(below) }, false);
+        return;
+      }
+      index = marks.length - 1;
+    }
+  }
+  showMark(index, scroll || Boolean(wanted));
 }
 
+// 止まる所を今の所にする。印でなければ（印の出ない一致）、そのターンの最初の要素へ送るだけにする
 function showMark(index, scroll) {
   if (marks[markIndex]) marks[markIndex].classList.remove("cur");
   markIndex = index;
-  const mark = marks[index];
-  mark.classList.add("cur");
-  const details = mark.closest("details");
+  const stop = marks[index];
+  if (stop.tagName === "MARK") stop.classList.add("cur");
+  const details = stop.closest("details");
   if (details) details.open = true;
-  if (scroll) mark.scrollIntoView({ block: "center" });
+  if (scroll) stop.scrollIntoView({ block: "center" });
   const conv = ui.detail.querySelector(".conv");
   const counter = conv && conv.querySelector(".hits");
-  if (counter) counter.textContent = "一致 " + (index + 1) + "/" + marks.length;
+  const turn = stopTurn(stop);
+  const position = hitTurns.indexOf(turn);
+  if (counter) counter.textContent = "一致 " + (position + 1) + "/" + hitTurns.length;
   for (const button of conv ? conv.querySelectorAll('[data-action="hit"]') : []) {
-    button.disabled = button.dataset.dir === "prev" ? index <= 0 : index >= marks.length - 1;
+    // 読み込んである止まる所の端でも、その向きに一致したターンが残っていれば押せる
+    button.disabled = button.dataset.dir === "prev" ? index <= 0 && position <= 0
+      : index >= marks.length - 1 && position >= hitTurns.length - 1;
   }
 }
 
@@ -1520,6 +1664,22 @@ function onKey(event) {
     }
     return;
   }
+  if (active && active.matches(".conv-q")) {
+    // 会話の中の検索の欄：Enter ですぐに探す。Esc は、文字があれば消して探し直し、なければ欄から出る
+    if (event.key === "Enter") {
+      event.preventDefault();
+      runConversationSearch();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      if (active.value) {
+        active.value = "";
+        runConversationSearch();
+      } else {
+        active.blur();
+      }
+    }
+    return;
+  }
   const slash = event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey;
   if (active && (active.matches("input, select, textarea") || active.isContentEditable)) {
     // ほかの入力欄（表示の設定など）では / と Esc だけを受ける。文字を打つ欄では / も打たせる
@@ -1649,6 +1809,10 @@ ui.q.addEventListener("input", (event) => {
   if (!event.isComposing) scheduleSearch(); // 日本語の変換中は、確定してから
 });
 ui.q.addEventListener("compositionend", scheduleSearch);
+document.addEventListener("input", onConversationInput); // 会話の中の検索の欄は、断片を入れ替えても効くように
+document.addEventListener("compositionend", (event) => {
+  if (event.target.matches && event.target.matches(".conv-q")) scheduleConversationSearch();
+});
 ui.confirm.addEventListener("click", (event) => {
   if (event.target === ui.confirm) hideContinue(); // 枠の外を押したら、やめる
 });
