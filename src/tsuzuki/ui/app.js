@@ -1202,7 +1202,7 @@ function copyPicked(button) {
   const card = button.closest(".task-card") || ui.detail;
   const refs = Array.from(card.querySelectorAll("input.pick:checked"), (box) => box.dataset.copy).filter(Boolean);
   if (refs.length) copyText(refs.join(" "));
-  else toast("コピーする資料にチェックを入れてください");
+  else toast("コピーするファイルにチェックを入れてください");
 }
 
 // 「新しい会話」：task.md を添えて会話を始める。コピーなら、返ったコマンドをコピーする。続けて押しても、

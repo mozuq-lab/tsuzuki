@@ -91,10 +91,10 @@ def session_item(rule="フォルダーで開始", confidence="confirmed", label=
 
 
 def file_item(path, *, rel_path=None, kind="other", kind_label="その他", title=None, excerpt="", relation=None,
-              doc_id=None, missing=False, copied=False) -> TaskFileItem:
+              doc_id=None, missing=False, copied=False, ext="", mtime=None, size=None) -> TaskFileItem:
     return TaskFileItem(path=path, rel_path=rel_path or path, kind=kind, kind_label=kind_label,
                         title=title or path.rsplit("/", 1)[-1], excerpt=excerpt, relation=relation, doc_id=doc_id,
-                        missing=missing, copied=copied)
+                        missing=missing, copied=copied, ext=ext, mtime=mtime, size=size)
 
 
 def make_detail(*, stage="実装", stage_from_pr=False, warnings=(), file_path=None, row=None, **kw) -> TaskDetail:
@@ -608,7 +608,7 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         missing = file_item("/Users/me/old/gone.md", missing=True, relation="名指し")
         d = make_detail(folder_cut=True, other_docs=make_detail().other_docs + [missing], other_total=2)
         html = frag_task_card(d, resume_default="vscode")
-        self.assertIn('<div class="sec">資料 5<button class="more" data-action="copy-picked">選んだ資料の @ をまとめてコピー'
+        self.assertIn('<div class="sec">資料 5<button class="more" data-action="copy-picked">選んだファイルの @ をまとめてコピー'
                       '</button></div>', html)
         self.assertEqual(re.findall(r'<div class="fold">([^<]*)</div>', html),
                          ["このタスクのフォルダー", "共通の資料", "ほかの場所の資料"])
@@ -630,7 +630,8 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertIn(' disabled>@ コピー</button>', rows[4])
         self.assertRegex(rows[4], r'<input type="checkbox" class="pick"[^>]* disabled>')
         self.assertNotIn("data-doc", rows[4])
-        self.assertIn("フォルダーのファイルが多いため、300件まで並べています", html)
+        work = html[html.index('<div class="sec">作業用のファイル'):]
+        self.assertIn("フォルダーのファイルが多いため、すべては並べていません", work)
         self.assertNotIn("（ほか", html)
         # 共通の資料とほかの場所の資料は上限まで。並べなかった数を出す
         capped = frag_task_card(make_detail(shared_total=1, other_total=60), resume_default="vscode")
@@ -641,6 +642,57 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         plain = frag_task_card(make_detail(folder_files=[file_item(TASK + "/shot.png", rel_path="shot.png")]),
                                resume_default="vscode")
         self.assertIn('<span class="p">shot.png</span>', plain)
+
+    def work(self):
+        when = 1795243515.0
+        return [file_item(TASK + "/check-login.sql", rel_path="check-login.sql", ext=".sql", relation="書いた",
+                          mtime=when, size=1200),
+                file_item(TASK + "/result.csv", rel_path="result.csv", ext=".csv", doc_id=40, mtime=when, size=49152),
+                file_item(TASK + "/Makefile", rel_path="Makefile"),
+                file_item(TASK + "/sql/seed users.sql", rel_path="sql/seed users.sql", ext=".sql", mtime=when, size=3000)]
+
+    def test_card_work_files(self):
+        html = frag_task_card(make_detail(work_files=self.work(), work_total=4), resume_default="vscode")
+        self.assertSafe(html)
+        section = html[html.index('<div class="sec">作業用のファイル 4</div>'):html.index('<div class="foot">')]
+        self.assertLess(html.index('<div class="sec">資料 '), html.index("作業用のファイル 4"))
+        self.assertEqual(re.findall(r'<div class="fold">([^<]*)</div>', section), ["./", "sql/"])
+        rows = re.findall(r'<div class="doc">(.*?)</div>', section)
+        when = fmt_local(iso_utc(1795243515.0))
+        self.assertEqual(rows[0], (
+            '<input type="checkbox" class="pick" data-copy="@{t}/check-login.sql" aria-label="選ぶ：check-login.sql">'
+            '<span class="ty">SQL</span><span class="p">check-login.sql</span>'
+            '<span class="w">書いた ・ {w} ・ 1KB</span>'
+            '<button class="cp" data-action="copy" data-copy="@{t}/check-login.sql">@ コピー</button>').format(
+                t=TASK, w=when))
+        self.assertIn('<span class="p" data-doc="40">result.csv</span>', rows[1])
+        self.assertIn('<span class="ty"></span><span class="p">Makefile</span><button', rows[2])
+        self.assertIn('data-copy="@&quot;%s/sql/seed users.sql&quot;"' % TASK, rows[3])
+        self.assertNotIn("作業用のファイル", frag_task_card(make_detail(), resume_default="vscode"))
+
+    def test_work_files_notes(self):
+        capped = frag_task_card(make_detail(work_files=self.work(), work_total=24, folder_cut=True),
+                                resume_default="vscode")
+        section = capped[capped.index("作業用のファイル 24"):]
+        self.assertEqual(re.findall(r'<div class="listnote">([^<]*)</div>', section),
+                         ["新しい順に300件まで並べています（ほか 20件）", "フォルダーのファイルが多いため、すべては並べていません"])
+        only_cut = frag_task_card(make_detail(folder_cut=True), resume_default="vscode")
+        self.assertIn('<div class="sec">作業用のファイル 0</div>', only_cut)
+
+    def test_work_file_names_are_escaped_and_quoted(self):
+        evil = file_item(TASK + "/" + EVIL + "/" + EVIL_FILE, rel_path=EVIL + "/" + EVIL_FILE, ext=".md")
+        spaced = file_item(TASK + '/a b/"x y".sql', rel_path='a b/"x y".sql', ext=".sql")
+        html = frag_task_card(make_detail(work_files=[evil, spaced], work_total=2), resume_default="vscode")
+        m = self.assertSafe(html)
+        self.assertIn(EVIL + "/", m.text)
+        self.assertIn(EVIL_FILE, m.text)
+        self.assertIn('@%s/a b/"x y".sql' % TASK, m.values("data-copy"))
+
+    def test_document_rows_show_when_and_size(self):
+        item = file_item(TASK + "/research-x.md", rel_path="research-x.md", kind="research", kind_label="調査",
+                         relation="作った", mtime=1795243515.0, size=6144)
+        html = frag_task_card(make_detail(folder_files=[item]), resume_default="vscode")
+        self.assertIn('<span class="w">作った ・ %s ・ 6KB</span>' % fmt_local(iso_utc(1795243515.0)), html)
 
     def test_documents_heading_counts_all_not_capped(self):
         # 資料の見出しの数は、並べた数（50件まで）でなく全体の数

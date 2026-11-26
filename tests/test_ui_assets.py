@@ -593,6 +593,9 @@ class TaskViewAssetsTest(unittest.TestCase):
         detail = make_detail(stage="PR", stage_from_pr=True, after=("その後の要約", "2026-11-21T09:00:00Z"),
                              folder_cut=True, warnings=["task.md に現在地がありません", "段階の値を読めません: x"])
         detail.folder_files.append(file_item("/Users/me/tasks/2026-11-20-a/gone.md", missing=True))
+        detail.work_files.append(file_item("/Users/me/tasks/2026-11-20-a/sql/check.sql", rel_path="sql/check.sql",
+                                           ext=".sql", relation="書いた", mtime=1.0, size=1))
+        detail.work_total = 1
         fragments = (frag_task_filters({"open": 2}, [(3, "web-app", 2)], status="open", place=None, shared_place=7,
                                        tasks_root="/Users/me/tasks"),
                      frag_task_list(rows, selected="b", status="all"),

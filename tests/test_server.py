@@ -1155,6 +1155,13 @@ class TaskServerTest(ServerCase):
         again = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
         self.assertEqual((again["ok"], again["message"]), (True, "もう整っています"))
 
+    def test_task_card_lists_work_files(self):
+        path = os.path.join(self.tasks_root, "2026-11-20-a", "check.sql")
+        write_file(path, "select 1;\n")
+        card = self.frag("/frag/task/2026-11-20-a")
+        self.assertIn('<div class="sec">作業用のファイル 1</div>', card)
+        self.assertIn('data-copy="@%s"' % path, card)
+
     def test_stale_readme_and_rule_are_brought_up_to_date_from_the_card(self):
         from tsuzuki.export import display_path, readme_section, rule_line
         self.app.cfg = Config(tasks_root=self.tasks_root)

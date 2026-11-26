@@ -793,7 +793,8 @@ def _frag_task(app: App, conn: sqlite3.Connection, name: str, p: _Params) -> str
         raise _HttpError(404, NOT_FOUND)
     detail = taskviews.task_detail(conn, name, live=app.live(), home=app.home, exclude_dirs=cfg.doc_scan.exclude_dirs,
                                    ticket_template=cfg.ticket_url, default_branches=cfg.default_branches,
-                                   max_depth=cfg.doc_scan.max_depth)
+                                   max_depth=cfg.doc_scan.max_depth, doc_extensions=cfg.doc_extensions,
+                                   max_files=cfg.doc_scan.max_files)
     if detail is None:
         raise _HttpError(404, NOT_FOUND)
     return ui_tasks.frag_task_card(detail, resume_default=cfg.resume_default, home=app.home,

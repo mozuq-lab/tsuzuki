@@ -19,7 +19,8 @@ from tsuzuki.retention import iso_utc
 from tsuzuki.tasks import SHARED_DIR, STAGES, TaskFile, at_reference, no_waiting, stage_label, ticket_numbers
 from tsuzuki.taskviews import (DOC_BUNDLE_LIMIT, STATUS_LABELS, WORK_FILES_LIMIT, TaskDetail, TaskFileItem, TaskRow,
                               TaskSessionItem)
-from tsuzuki.ui_render import _attrs, _badges, _button, _e, _filter_row, _join, _n, _period, _tilde
+from tsuzuki.ui_render import (Attr, _attrs, _badges, _button, _e, _filter_row, _join, _mtime, _n, _period, _size,
+                                _tilde)
 
 NO_PLACE_ID = 0  # 左の「場所なし」を選ぶときの場所の ID（台帳の場所の ID は 1 から）
 # 左の状況：(サーバーの status, data-status の値, 言葉)。data-status の "" は既定（進行中と待ち）
@@ -232,7 +233,8 @@ def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = 
                               ("data-size", d.md_size)),
            '<div class="dh"><div class="head"><h4>%s</h4><div class="meta">%s</div></div><div class="btns">%s</div>'
            '</div>' % (_e(row.title), meta, _card_buttons(d, resume_default, vscode_terminal)),
-           _steps(row, d.sections.get("待っていること")), _status_box(d, boxed), _fields(d), _card_prep(prep), _sessions(d.sessions), _documents(d, home)]
+           _steps(row, d.sections.get("待っていること")), _status_box(d, boxed), _fields(d), _card_prep(prep), _sessions(d.sessions), _documents(d, home),
+           _work_files(d)]
     out.append(_foot(d, home))
     out += ['<div class="notice">%s</div>' % _e(note) for note in notes]
     out.append("</div>")
@@ -353,7 +355,7 @@ def _documents(d: TaskDetail, home: Optional[str]) -> str:
     # 共通の資料とほかの場所の資料は50件までしか並べないので、見出しの数は全体の数で出す
     total = len(d.folder_files) + d.shared_total + d.other_total
     out = ['<div class="sec">資料 %s%s</div>' % (
-        _n(total), _button("選んだ資料の @ をまとめてコピー", "more", ("data-action", "copy-picked")))]
+        _n(total), _button("選んだファイルの @ をまとめてコピー", "more", ("data-action", "copy-picked")))]
     bundles = (("このタスクのフォルダー", d.folder_files, lambda item: item.rel_path, 0),
                ("共通の資料", d.shared_docs, lambda item: os.path.relpath(item.path, root), d.shared_total),
                ("ほかの場所の資料", d.other_docs, lambda item: _tilde(item.path, home) if home else item.path,
@@ -363,9 +365,6 @@ def _documents(d: TaskDetail, home: Optional[str]) -> str:
             continue
         out.append('<div class="fold">%s</div>' % heading)
         out += [_file_row(item, shown(item), copy_to_task=items is d.other_docs) for item in items]
-        if items is d.folder_files and d.folder_cut:
-            out.append('<div class="listnote">フォルダーのファイルが多いため、%s件まで並べています</div>'
-                       % _n(WORK_FILES_LIMIT))
         if bundle_total > len(items):  # 共通の資料とほかの場所の資料は、新しい順に上限まで
             out.append('<div class="listnote">新しい順に%s件まで並べています（ほか %s件）</div>'
                        % (_n(DOC_BUNDLE_LIMIT), _n(bundle_total - len(items))))
@@ -391,7 +390,7 @@ def _file_row(item: TaskFileItem, name: str, *, copy_to_task: bool = False) -> s
     if copy_to_task and item.copied:
         title += '<span class="ex copied">コピー済み</span>'
     pairs = [("class", "p")] + ([("data-doc", item.doc_id)] if item.doc_id is not None else [])
-    relation = '<span class="w">%s</span>' % _e(item.relation) if item.relation else ""
+    relation = _file_meta(item)
     copy_button = ""
     if copy_to_task:
         attrs = [("data-action", "task-copy-doc")]
@@ -400,6 +399,45 @@ def _file_row(item: TaskFileItem, name: str, *, copy_to_task: bool = False) -> s
     return '<div class="doc">%s<span class="ty">%s</span><span%s>%s</span>%s%s%s</div>' % (
         pick, _e(item.kind_label), _attrs(*pairs), title, relation, copy_button,
         _button("@ コピー", "cp", ("data-action", "copy"), ("data-copy", ref), disabled=item.missing))
+
+
+def _file_meta(item: TaskFileItem) -> str:
+    """行の右の「関わり ・ 更新日時 ・ 大きさ」。どれもなければ空。"""
+    meta = _join([_e(item.relation or ""), _e(_mtime(item.mtime)), _e(_size(item.size))])
+    return '<span class="w">%s</span>' % meta if meta else ""
+
+
+def _work_files(d: TaskDetail) -> str:
+    """作業用のファイルの束：フォルダー（./ が最初）ごとに、新しい順（並びは taskviews が決める）。ないとき、
+    フォルダーを読む上限で切ってもいないときは出さない。"""
+    if not d.work_files and not d.folder_cut:
+        return ""
+    out = ['<div class="sec">作業用のファイル %s</div>' % _n(d.work_total)]
+    folder = None  # type: Optional[str]
+    for item in d.work_files:
+        here = os.path.dirname(item.rel_path)
+        if here != folder:
+            folder = here
+            out.append('<div class="fold">%s</div>' % _e(here + "/" if here else "./"))
+        out.append(_work_row(item))
+    if d.work_total > len(d.work_files):
+        out.append('<div class="listnote">新しい順に%s件まで並べています（ほか %s件）</div>'
+                   % (_n(WORK_FILES_LIMIT), _n(d.work_total - len(d.work_files))))
+    if d.folder_cut:
+        out.append('<div class="listnote">フォルダーのファイルが多いため、すべては並べていません</div>')
+    return "".join(out)
+
+
+def _work_row(item: TaskFileItem) -> str:
+    """作業用のファイルの行：選ぶ欄・拡張子・名前（台帳の資料なら押すと開く）・関わりと更新日時と大きさ・@ コピー。"""
+    ref = at_reference(item.path)
+    name = os.path.basename(item.path)
+    pick = "<input%s>" % _attrs(("type", "checkbox"), ("class", "pick"), ("data-copy", ref),
+                                ("aria-label", "選ぶ：" + name))
+    pairs = [("class", "p")] + ([("data-doc", item.doc_id)] if item.doc_id is not None else [])  # type: List[Attr]
+    return '<div class="doc">%s<span class="ty">%s</span><span%s>%s</span>%s%s</div>' % (
+        pick, _e(item.ext.lstrip(".").upper()), _attrs(*pairs), _e(name), _file_meta(item),
+        _button("@ コピー", "cp", ("data-action", "copy"), ("data-copy", ref)))
 
 
 def _sessions(items: List[TaskSessionItem]) -> str:
