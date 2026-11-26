@@ -14,7 +14,7 @@ from unittest import mock
 
 from tsuzuki import cli, doctor
 from tsuzuki.config import Config
-from tsuzuki.export import display_path
+from tsuzuki.export import display_path, rule_line
 from tsuzuki.doctor import Check, build_report, hook_configured, run_checks, task_checks, task_report
 from tsuzuki.indexer import update
 from tsuzuki.store import LEDGER_FILENAME, set_meta
@@ -343,9 +343,10 @@ class TaskChecksTest(DoctorTestBase):
         self.claude = self.root / "claude"
         self.claude.mkdir(exist_ok=True)
 
-    def install(self, *, claude_md="~/tasks/README.md を読む", dirs=None):
+    def install(self, *, claude_md="~/tasks/README.md を読む\n- 作業用のファイルはタスクのフォルダーに置く\n", dirs=None,
+                readme="# 決まり\n\n## 作業用のファイル\n"):
         self.tasks.mkdir(exist_ok=True)
-        (self.tasks / "README.md").write_text("x", encoding="utf-8")
+        (self.tasks / "README.md").write_text(readme, encoding="utf-8")
         write_json(self.claude, "settings.json",
                    {"permissions": {"additionalDirectories": dirs if dirs is not None else [str(self.tasks)]}})
         for name in ("task-start", "task-handoff"):
@@ -380,6 +381,20 @@ class TaskChecksTest(DoctorTestBase):
         self.assertEqual(self.details()["スキル（task-start・task-handoff）"], "2つともあります")
         self.assertEqual(self.details()["CLAUDE.md の決まり"], "書かれています")
 
+    def test_stale_readme_warns(self):
+        self.install(readme="x")
+        self.assertEqual(self.checks()["タスクの決まり（README.md）"], "warn")
+        self.assertEqual(self.details()["タスクの決まり（README.md）"],
+                         "作業用のファイルの節がありません（タスクのカードの「Claude で使う準備」から足せます）")
+
+    def test_stale_claude_md_stays_ok_and_shows_the_line(self):
+        self.install(claude_md="~/tasks/README.md を読む\n")
+        self.assertEqual(self.checks()["CLAUDE.md の決まり"], "ok")
+        line = rule_line(tasks_root_display=display_path(self.tasks, self.home)).rstrip("\n")
+        self.assertEqual(self.details()["CLAUDE.md の決まり"],
+                         "作業用のファイルの1行がありません。タスクのカードから会話を始めるフォルダーに足すか、"
+                         "次の1行を足してください：" + line)
+
     def test_absolute_path_in_claude_md_and_ancestor_dir(self):
         self.install(claude_md="%s/README.md" % self.tasks, dirs=["~"])
         self.assertEqual(set(self.checks().values()), {"ok"})
@@ -411,7 +426,7 @@ class TaskChecksTest(DoctorTestBase):
         report = build_report(None, claude_dir=self.claude, sample=0,
                               tasks=task_report(self.cfg, claude_dir=self.claude, home=self.home))
         self.assertEqual(set(report["tasks"]), {"root_exists", "root_writable", "readme", "additional_dirs",
-                                                "skills", "claude_md"})
+                                                "skills", "claude_md", "readme_current", "claude_md_current"})
         flat = json.dumps(report["tasks"])
         self.assertNotIn("README", flat)
         self.assertNotIn(str(self.root), flat)
@@ -421,4 +436,5 @@ class TaskChecksTest(DoctorTestBase):
         self.install()
         r = task_report(self.cfg, claude_dir=self.claude, home=self.home)
         self.assertEqual(r, {"root_exists": True, "root_writable": True, "readme": True, "additional_dirs": True,
-                             "skills": {"task-start": True, "task-handoff": True}, "claude_md": True})
+                             "skills": {"task-start": True, "task-handoff": True}, "claude_md": True,
+                             "readme_current": True, "claude_md_current": True})

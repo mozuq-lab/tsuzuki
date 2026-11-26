@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from tsuzuki import __version__
 from tsuzuki.config import Config, ConfigError, resolve_tasks_root
-from tsuzuki.export import display_path
+from tsuzuki.export import WORK_FILES_HEADING, WORK_FILES_MARK, display_path, readme_is_current, rule_line
 from tsuzuki.indexer import discover_transcripts
 from tsuzuki.sources.transcript import iter_lines, record_type
 from tsuzuki.store import LEDGER_FILENAME, get_meta, has_trigram, open_ledger
@@ -220,18 +220,28 @@ def _claude_md_ok(claude_md: Path, root: Path, home: str) -> bool:
     return display_path(readme, home) in text or str(readme) in text
 
 
+def _read_or(path: Path, unreadable: str) -> str:
+    """path の中身。読めなければ unreadable（読めない物を古いとしないため）。"""
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return unreadable
+
+
 def _task_facts(cfg: Config, claude_dir: Path, home: str):
     claude_dir = Path(claude_dir)
     root, error = _tasks_root_or_none(cfg, claude_dir, home)
     facts = {"root_exists": False, "root_writable": False, "readme": False, "additional_dirs": False,
              "skills": {n: (claude_dir / "skills" / n / "SKILL.md").is_file() for n in TASK_SKILLS},
-             "claude_md": False}  # type: Dict[str, Any]
+             "claude_md": False, "readme_current": False, "claude_md_current": False}  # type: Dict[str, Any]
     if root is not None:
         facts["root_exists"] = root.is_dir()
         facts["root_writable"] = root.is_dir() and os.access(str(root), os.W_OK)
         facts["readme"] = (root / "README.md").is_file()
         facts["additional_dirs"] = _additional_dirs_ok(claude_dir / "settings.json", root, home)
         facts["claude_md"] = _claude_md_ok(claude_dir / "CLAUDE.md", root, home)
+        facts["readme_current"] = facts["readme"] and readme_is_current(_read_or(root / "README.md", WORK_FILES_HEADING))
+        facts["claude_md_current"] = WORK_FILES_MARK in _read_or(claude_dir / "CLAUDE.md", "")
     return root, error, facts
 
 
@@ -261,8 +271,12 @@ def task_checks(cfg: Config, *, claude_dir: Path, home: str) -> List[Check]:
         checks.append(Check(names[0], "warn", "書き込めません: %s" % root))
     else:
         checks.append(Check(names[0], "ok", str(root)))
-    checks.append(Check(names[1], "ok", "あります") if f["readme"]
-                  else Check(names[1], "warn", "%s がありません" % (root / "README.md")))
+    if not f["readme"]:
+        checks.append(Check(names[1], "warn", "%s がありません" % (root / "README.md")))
+    elif not f["readme_current"]:
+        checks.append(Check(names[1], "warn", "作業用のファイルの節がありません（タスクのカードの「Claude で使う準備」から足せます）"))
+    else:
+        checks.append(Check(names[1], "ok", "あります"))
     # この3つは、~/.claude になくてもよい（タスクのカードの「Claude で使う準備」が、会話を始めるフォルダーに置く）
     where = display_path(claude_dir, home)
     hint = "（タスクのカードの「Claude で使う準備」から、会話を始めるフォルダーに置けます）"
@@ -271,8 +285,15 @@ def task_checks(cfg: Config, *, claude_dir: Path, home: str) -> List[Check]:
     missing = [n for n in TASK_SKILLS if not f["skills"][n]]
     checks.append(Check(names[3], "ok", "2つともあります") if not missing
                   else Check(names[3], "ok", "%s/skills にはありません: %s%s" % (where, "、".join(missing), hint)))
-    checks.append(Check(names[4], "ok", "書かれています") if f["claude_md"]
-                  else Check(names[4], "ok", "%s/CLAUDE.md にはありません%s" % (where, hint)))
+    if not f["claude_md"]:
+        checks.append(Check(names[4], "ok", "%s/CLAUDE.md にはありません%s" % (where, hint)))
+    elif not f["claude_md_current"]:
+        # ~/.claude/CLAUDE.md はもともと置かなくてもよいので ⚠ にしない（カードで足しても、ここは古いまま残る）
+        line = rule_line(tasks_root_display=display_path(root, home)).rstrip("\n")
+        checks.append(Check(names[4], "ok", "作業用のファイルの1行がありません。タスクのカードから会話を始めるフォルダーに"
+                                            "足すか、次の1行を足してください：" + line))
+    else:
+        checks.append(Check(names[4], "ok", "書かれています"))
     return checks
 
 
