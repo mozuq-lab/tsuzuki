@@ -84,10 +84,14 @@ def _one_line(value: str) -> str:
     return " ".join(value.split())
 
 
-def render_task_md(*, title: str, ticket: Optional[str], repo: Optional[str], created: str, updated: str) -> str:
+def render_task_md(*, title: str, ticket: Optional[str], repo: Optional[str], created: str, updated: str,
+                   workspace: Optional[str] = None) -> str:
+    """新しい task.md の文。workspace があれば、見出し情報の repo の行の次に workspace の行を書く。"""
     title = _one_line(title)
     ticket_line = 'ticket: "%s"' % ticket.replace('"', "") if ticket else "ticket:"
     repo_line = "repo: %s" % _one_line(repo) if repo and _one_line(repo) else "repo:"
+    if workspace:
+        repo_line += "\nworkspace: %s" % workspace
     return (
         "---\ntitle: %s\n%s\nstage: %s\nwaiting: false\n%s\ncreated: %s\nupdated: %s\n---\n"
         "# %s\n\n## 目的\n\n## 現在地\n\n## 次の一手\n\n## 待っていること\nなし\n\n## 決めたこと\n\n## 資料\n"
@@ -133,9 +137,13 @@ def place_tasks_readme(tasks_root: Path, text: str, *, claude_dir: Optional[Path
 
 def create_task(tasks_root: Path, short_name: str, *, title: Optional[str] = None, ticket: Optional[str] = None,
                 repo: Optional[str] = None, now: Optional[datetime] = None,
-                claude_dir: Optional[Path] = None) -> Path:
+                claude_dir: Optional[Path] = None, workspace: Optional[str] = None,
+                home: Optional[str] = None) -> Path:
+    """タスクのフォルダーと task.md を作る。workspace があれば、フォルダーを作る前に設定と同じく確かめ
+    （だめなら TaskWriteError で、何も作らない）、~ を home で展開した絶対パスを書く。"""
     name = normalize_short_name(short_name)
     _refuse_claude_dir(tasks_root, claude_dir)
+    workspace_path = normalize_workspace(workspace, home=home or os.path.expanduser("~")) if workspace else None
     now = now or datetime.now()
     title = _one_line(title or "") or name
     root = Path(os.path.abspath(str(tasks_root)))
@@ -151,7 +159,8 @@ def create_task(tasks_root: Path, short_name: str, *, title: Optional[str] = Non
     except OSError as e:
         raise TaskWriteError("フォルダーを作れません: %s（%s）" % (folder, e))
     text = render_task_md(title=title, ticket=normalize_ticket(ticket), repo=repo,
-                          created=now.strftime("%Y-%m-%d"), updated=now.strftime("%Y-%m-%dT%H:%M"))
+                          created=now.strftime("%Y-%m-%d"), updated=now.strftime("%Y-%m-%dT%H:%M"),
+                          workspace=workspace_path)
     md = folder / TASK_MD
     try:
         with open(str(md), "x", encoding="utf-8", newline="") as f:

@@ -1453,6 +1453,26 @@ class TaskServerTest(ServerCase):
         self.assertTrue(copy["command"].startswith("cd "))
         self.assertEqual(self.runner_calls, [])  # copy では何も起動しない
 
+    def test_task_new_with_a_workspace(self):
+        ws_dir = os.path.join(self.root, "wsn")
+        os.makedirs(os.path.join(ws_dir, "app"))
+        ws = os.path.join(ws_dir, "n.code-workspace")
+        write_file(ws, json.dumps({"folders": [{"path": "app"}]}))
+        made = self.action("/api/task-new", {"title": "W", "short_name": "with-ws", "workspace": ws}).json()
+        self.assertEqual((made["ok"], made["message"]),
+                         (True, 'タスクを作りました。ワークスペースの folders の先頭に "." を足しました'))
+        self.assertIn("workspace: %s\n" % ws, read_file(made["task_md"]))
+        self.assertEqual(json.loads(read_file(ws))["folders"][0], {"path": "."})
+        present = os.path.join(ws_dir, "p.code-workspace")
+        write_file(present, json.dumps({"folders": [{"path": "."}]}))
+        made = self.action("/api/task-new", {"title": "P", "short_name": "present-ws", "workspace": present}).json()
+        self.assertEqual((made["ok"], made["message"]), (True, "タスクを作りました"))
+        bad = self.action("/api/task-new", {"title": "B", "short_name": "bad-ws",
+                                            "workspace": os.path.join(ws_dir, "none.code-workspace")}).json()
+        self.assertFalse(bad["ok"])
+        self.assertIn("ファイルがありません", bad["message"])
+        self.assertEqual([n for n in os.listdir(self.tasks_root) if n.endswith("bad-ws")], [])
+
     def test_task_trash(self):
         trash = os.path.join(self.root, "trash")
         os.makedirs(trash)

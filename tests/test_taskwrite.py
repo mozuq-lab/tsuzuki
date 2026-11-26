@@ -78,6 +78,34 @@ class CreateTest(_TmpCase):
         self.assertEqual((tf.title, tf.ticket, tf.stage, tf.created, tf.updated),
                          ("ログインの期限", "#123", "チケット", "2026-11-22", "2026-11-22T10:05"))
 
+    def test_create_task_with_a_workspace(self):
+        folder = self.base / "ws"
+        (folder / "app").mkdir(parents=True)
+        ws = folder / "x.code-workspace"
+        ws.write_text('{"folders": [{"path": "app"}]}', encoding="utf-8")
+        md = create_task(self.root, "login", title="ログイン", repo="/r/app", workspace=str(ws),
+                         now=datetime(2026, 11, 27, 10, 0), home=str(self.base))
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("repo: /r/app\nworkspace: %s\ncreated:" % ws, text)
+        self.assertEqual(parse_task_md(text).workspace, str(ws))
+        tilde = create_task(self.root, "tilde", workspace="~/ws/x.code-workspace", now=datetime(2026, 11, 27, 10, 0),
+                            home=str(self.base))
+        self.assertEqual(parse_task_md(tilde.read_text(encoding="utf-8")).workspace, str(ws))
+        plain = create_task(self.root, "plain", now=datetime(2026, 11, 27, 10, 0))
+        self.assertNotIn("workspace:", plain.read_text(encoding="utf-8"))
+
+    def test_bad_workspace_creates_nothing(self):
+        (self.base / "w").mkdir()
+        (self.base / "w" / "x.json").write_text("{}", encoding="utf-8")
+        (self.base / "w" / "nofolder.code-workspace").write_text('{"folders": []}', encoding="utf-8")
+        for bad in ("relative.code-workspace", str(self.base / "w" / "none.code-workspace"),
+                    str(self.base / "w" / "x.json"), str(self.base / "w" / "nofolder.code-workspace")):
+            with self.subTest(bad=bad):
+                with self.assertRaises(TaskWriteError):
+                    create_task(self.root, "login", workspace=bad, now=datetime(2026, 11, 27, 10, 0),
+                                home=str(self.base))
+                self.assertFalse((self.root / "2026-11-27-login").exists())
+
     def test_title_defaults_to_short_name(self):
         md = create_task(self.root, "login", now=datetime(2026, 11, 22, 10, 5))
         self.assertEqual(parse_task_md(md.read_text(encoding="utf-8")).title, "login")

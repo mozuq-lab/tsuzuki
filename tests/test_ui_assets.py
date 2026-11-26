@@ -555,6 +555,7 @@ class TaskViewAssetsTest(unittest.TestCase):
         self.assertIn('"new-task": () => openNewTask(),', js)
         create = _function(js, "createTask")
         self.assertIn('postWrite("/api/task-new", ', create)
+        self.assertIn('workspace: field("workspace")', create)
         self.assertIn('go({ v: "tasks", task: answer.task,', create)
         self.assertIn('document.addEventListener("submit", onSubmit);', js)
 

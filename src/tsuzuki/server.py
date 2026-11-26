@@ -136,6 +136,11 @@ STAGE_SET = "段階を「%s」にしました"
 WAITING_SET = {True: "待ちにしました", False: "待ちを解きました"}
 SETTINGS_SET = "設定を変えました"
 WORKSPACE_ADDED = SETTINGS_SET + '。ワークスペースの folders の先頭に "." を足しました'
+TASK_WORKSPACE_ADDED = TASK_MADE + '。ワークスペースの folders の先頭に "." を足しました'
+TASK_WORKSPACE_ELSEWHERE = (TASK_MADE + '。ワークスペースの folders に "." がありますが、先頭ではありません。'
+                            "パネルの新しい会話をこのフォルダーで始めるには、先頭に移してください")
+TASK_WORKSPACE_NOT_ADDED = (TASK_MADE + '。ただし、ワークスペースに "." を足せませんでした（%s）。'
+                            '手で folders の先頭に {"path": "."} を足してください')
 WORKSPACE_ELSEWHERE = (SETTINGS_SET + '。ワークスペースの folders に "." がありますが、先頭ではありません。'
                        "パネルの新しい会話をこのフォルダーで始めるには、先頭に移してください")
 WORKSPACE_NOT_ADDED = (SETTINGS_SET + '。ただし、ワークスペースに "." を足せませんでした（%s）。'
@@ -975,6 +980,7 @@ def _api_reindex(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 def _api_task_new(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     title, short_name = _task_text(data, "title"), _task_text(data, "short_name")
     ticket, repo = _task_text(data, "ticket", ""), _task_text(data, "repo", "")
+    workspace = _task_text(data, "workspace", "")
     with update_lock(app.ledger_dir), app.connect() as conn:
         root = app.tasks_root  # 更新の鍵を取ってから読む（切り替えの途中の置き場所を使わない）
         if root is None:
@@ -985,7 +991,8 @@ def _api_task_new(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
             return _task_failed(NOT_A_PLACE)
         try:
             task_md = create_task(root, short_name, title=title, ticket=ticket or None, repo=repo or None,
-                                 claude_dir=app.claude_dir)
+                                 claude_dir=app.claude_dir, workspace=workspace.strip() or None,
+                                 home=str(app.home))
         except TaskWriteError as e:
             return _task_failed(str(e))
         except (OSError, ValueError) as e:  # ValueError は UnicodeEncodeError を含む
@@ -993,7 +1000,20 @@ def _api_task_new(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
         name = task_md.parent.name
         _reread_task(app, conn, name)
     app.forget_searches()
-    return {"ok": True, "message": TASK_MADE, "task": name, "task_md": str(task_md)}
+    message = TASK_MADE
+    try:
+        with open(str(task_md), "rb") as f:
+            written = parse_task_md(f.read().decode("utf-8")).workspace
+    except (OSError, UnicodeDecodeError):
+        written = None
+    if written:  # 設定と同じく、task.md を書けたあとで、ワークスペースの folders の先頭に "." を足す
+        try:
+            result = ensure_self_first(written, claude_dir=app.claude_dir)
+        except WorkspaceError as e:
+            message = TASK_WORKSPACE_NOT_ADDED % e
+        else:
+            message = {"added": TASK_WORKSPACE_ADDED, "elsewhere": TASK_WORKSPACE_ELSEWHERE}.get(result, TASK_MADE)
+    return {"ok": True, "message": message, "task": name, "task_md": str(task_md)}
 
 
 def _api_task_stage(app: App, data: Dict[str, Any]) -> Dict[str, Any]:

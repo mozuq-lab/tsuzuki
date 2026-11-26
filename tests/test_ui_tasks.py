@@ -10,7 +10,7 @@ from tsuzuki.render import fmt_local
 from tsuzuki.retention import iso_utc
 from tsuzuki.tasks import STAGES, TaskFile, stage_label
 from tsuzuki.taskviews import TaskDetail, TaskFileItem, TaskRow, TaskSessionItem
-from tsuzuki.ui_tasks import (CardPrep, at_reference, frag_new_task, frag_task_card, frag_task_settings, frag_task_filters,
+from tsuzuki.ui_tasks import (WORKSPACE_NOTE, CardPrep, at_reference, frag_new_task, frag_task_card, frag_task_settings, frag_task_filters,
                               frag_task_list)
 from tsuzuki.views import SessionRow
 from tests.fixtures import sid, t
@@ -736,7 +736,10 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         m = self.assertSafe(html)
         self.assertEqual(m.tags[0], ("form", {"id": "new-task", "class": "new-task", "autocomplete": "off"}))
         self.assertEqual([a["name"] for tag, a in m.tags if tag in ("input", "select")],
-                         ["title", "short_name", "ticket", "repo"])
+                         ["title", "short_name", "ticket", "repo", "workspace"])
+        self.assertIn('<label class="kv"><span class="k">ワークスペース</span><input name="workspace" maxlength="1000" '
+                      'spellcheck="false" placeholder="~/dev/app.code-workspace（任意）"></label>', html)
+        self.assertIn('<div class="note">%s</div>' % htmllib.escape(WORKSPACE_NOTE, quote=True), html)
         self.assertIn("required", m.tags_with("name", "title")[0][1])
         self.assertIn("required", m.tags_with("name", "short_name")[0][1])
         self.assertNotIn("required", m.tags_with("name", "ticket")[0][1])

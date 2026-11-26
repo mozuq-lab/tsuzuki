@@ -1292,7 +1292,7 @@ async function createTask(form) {
   let answer;
   try {
     answer = await postWrite("/api/task-new", { title: field("title"), short_name: field("short_name"),
-      ticket: field("ticket"), repo: field("repo") });
+      ticket: field("ticket"), repo: field("repo"), workspace: field("workspace") });
   } finally {
     writing = false;
     if (submit) submit.disabled = false;

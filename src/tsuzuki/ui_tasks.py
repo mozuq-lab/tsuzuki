@@ -463,7 +463,7 @@ def _sessions(items: List[TaskSessionItem]) -> str:
 
 def frag_new_task(repos: List[Tuple[str, str]]) -> str:
     """新しいタスクの入力欄：題（必須）・短い名前（必須）・チケット番号・リポジトリ（場所の一覧から。
-    repos は（パス、表示名））。送るのは画面の JavaScript（/api/task-new）で、フォームそのものは送らない。"""
+    repos は（パス、表示名））・ワークスペース（任意。設定の欄と同じ形）。送るのは画面の JavaScript（/api/task-new）で、フォームそのものは送らない。"""
     options = ['<option value="">なし</option>']
     options += ["<option%s>%s</option>" % (_attrs(("value", path), ("title", path)), _e(display))
                 for path, display in repos]
@@ -479,8 +479,12 @@ def frag_new_task(repos: List[Tuple[str, str]]) -> str:
         'placeholder="#123, #456（任意）"></label>'
         '<div class="note">複数あるときは , で区切ります</div>'
         '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
+        '<label class="kv"><span class="k">ワークスペース</span><input%s></label>'
+        '<div class="note">%s</div>'
         '<div class="btns"><button type="submit" class="btn pri">作る</button></div>'
-        '</form>' % "".join(options))
+        '</form>' % ("".join(options), _attrs(("name", "workspace"), ("maxlength", 1000), ("spellcheck", "false"),
+                                              ("placeholder", "~/dev/app.code-workspace（任意）")),
+                     _e(WORKSPACE_NOTE)))
 
 
 # 右：タスクの設定
