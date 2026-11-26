@@ -13,7 +13,7 @@ from unittest import mock
 
 from tsuzuki import cli
 from tsuzuki.config import Config
-from tsuzuki.resume import (ActionOutcome, applescript_quote, is_session_id, open_document, open_place, resume,
+from tsuzuki.resume import (ActionOutcome, applescript_quote, is_session_id, open_document, open_folder, open_place, resume,
                            resume_command, run_steps, terminal_steps, vscode_steps, conversation_prompt,
                            new_conversation_command, vscode_new_steps, terminal_new_steps, start_conversation,
                            NO_WORKSPACE)
@@ -171,6 +171,14 @@ class ResumeTest(unittest.TestCase):
         self.assertEqual(run(99, "finder").message, "台帳にない資料です")
         self.assertEqual(run(3, "finder").message, "ファイルが見つかりません: " + os.path.join(self.d, "no.md"))
         self.assertEqual(run(1, "zzz").message, "開き方が正しくありません")
+
+    def test_open_folder(self):
+        self.assertEqual(open_folder(self.d, runner=self.runner).message, "開きました")
+        self.assertEqual(self.calls[-1], ["open", self.d])
+        n = len(self.calls)
+        self.assertEqual(open_folder("/nonexistent-tsuzuki", runner=self.runner).message,
+                         "フォルダーが見つかりません: /nonexistent-tsuzuki")
+        self.assertEqual(len(self.calls), n)
 
     def test_open_place(self):
         run = lambda pid, how: open_place(self.conn, pid, how, cfg=self.cfg, runner=self.runner)

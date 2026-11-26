@@ -419,6 +419,8 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertSafe(html)
         meta = re.search(r'<div class="meta">(.*?)</div>', html).group(1)
         self.assertIn('<button class="more" data-action="copy" data-copy="%s">パスをコピー</button>' % TASK, meta)
+        self.assertIn('<button class="more" data-action="copy" data-copy="%s">パスをコピー</button>'
+                      '<button class="more" data-action="open-task">Finder で開く</button>' % TASK, meta)
         self.assertIn("~/tasks/2026-11-20-a", meta)
         self.assertLess(meta.index("~/tasks/2026-11-20-a"), meta.index("パスをコピー"))
 

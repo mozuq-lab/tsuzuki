@@ -226,7 +226,8 @@ def frag_task_card(d: TaskDetail, *, resume_default: str, home: Optional[str] = 
     boxed = [w for w in d.warnings if w == NO_CURRENT]
     notes = [w for w in d.warnings if w != NO_CURRENT]
     meta = _join([_e(row.ticket or "チケットなし"), _e(_tilde(d.path, home) if home else d.path) + _button(
-                      "パスをコピー", "more", ("data-action", "copy"), ("data-copy", d.path)),
+                      "パスをコピー", "more", ("data-action", "copy"), ("data-copy", d.path))
+                  + _button("Finder で開く", "more", ("data-action", "open-task")),
                   _e(_period(_date_iso(d.created), row.last_at, days=True)),
                   "会話 %s" % _n(row.n_sessions) if row.n_sessions else ""])
     out = ["<div%s>" % _attrs(("class", "task-card"), ("data-task", row.name), ("data-mtime", repr(d.md_mtime)),

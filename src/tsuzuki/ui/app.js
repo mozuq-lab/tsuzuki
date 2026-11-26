@@ -540,6 +540,7 @@ const ACTIONS = {
   "tasks-readme": (button) => placeTasksReadme(button),
   "task-prep": (button) => sendTask("/api/task-prep", { task: button.closest(".task-card").dataset.task,
     item: button.dataset.item }),
+  "open-task": (button) => act("/api/open-task", { task: button.closest(".task-card").dataset.task }),
   "task-unlink": (button) => unlinkSession(button),
   "task-conversation": (button) => startConversation(button),
   "task-trash": (button) => trashTask(button),

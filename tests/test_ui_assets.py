@@ -25,7 +25,7 @@ MAKE_DEMO = ROOT / "scripts" / "make_demo.py"
 ACTIONS = {"resume", "copy", "conversation", "card", "hit", "children", "orphans", "open-doc", "open-place", "docs",
            "fold", "read-more", "task-stage", "task-waiting", "task-settings", "copy-picked", "task-unlink", "task-conversation",
            "new-task", "task-open", "task-link", "task-trash", "task-copy-doc", "form-cancel", "ticket-url-edit",
-           "tasks-root-edit", "tasks-readme", "task-prep"}
+           "tasks-root-edit", "tasks-readme", "task-prep", "open-task"}
 # URL の # に残す状態の鍵（qdays・role・order は検索の期間・発言者・並び順。task と status はタスクの選択と状況）
 HASH_KEYS = ["v", "p", "s", "q", "i", "t", "c", "d", "k", "days", "h", "qdays", "role", "order", "task", "status"]
 # 断片（ui_render）が使う class。見た目はすべて app.css に置く

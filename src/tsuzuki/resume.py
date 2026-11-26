@@ -188,6 +188,13 @@ def open_document(conn: sqlite3.Connection, doc_id: int, how: str, *, cfg: Confi
     return _execute(steps, "開きました", runner=runner)
 
 
+def open_folder(path: str, *, runner=_run) -> ActionOutcome:
+    """フォルダーを Finder で開く。path は台帳から引いたもの（タスクのフォルダー）で、画面から受け取ったものではない。"""
+    if not os.path.isdir(path):
+        return ActionOutcome(False, False, "フォルダーが見つかりません: %s" % path)
+    return _execute([["open", path]], "開きました", runner=runner)
+
+
 def open_place(conn: sqlite3.Connection, place_id: int, how: str, *, cfg: Config, runner=_run) -> ActionOutcome:
     row = conn.execute("SELECT path FROM places WHERE id = ?", (place_id,)).fetchone()
     if row is None:

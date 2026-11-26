@@ -40,7 +40,8 @@ from tsuzuki.config import (Config, ConfigError, normalize_tasks_root_input, nor
 from tsuzuki.export import display_path, readme_is_current, readme_section, rule_line, template_text
 from tsuzuki.privacy import os_error_text
 from tsuzuki.indexer import UpdateReport, update, update_lock
-from tsuzuki.resume import ActionOutcome, is_session_id, open_document, open_place, resume, start_conversation
+from tsuzuki.resume import (ActionOutcome, is_session_id, open_document, open_folder, open_place, resume,
+                            start_conversation)
 from tsuzuki.vscode_ext import VSCodeTerminal, requests_dir
 from tsuzuki.retention import iso_utc
 from tsuzuki.search import (DEFAULT_TARGETS, MAX_TERM_CHARS, MAX_TERMS, ORDERS, RESULT_LIMIT, TARGETS, DocHit,
@@ -951,6 +952,16 @@ def _api_open_place(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
         return _outcome(open_place(conn, place_id, how, cfg=app.cfg, runner=app.runner))
 
 
+def _api_open_task(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
+    """タスクのフォルダーを Finder で開く。開くのは台帳の tasks.path だけ（画面からはタスクの名前だけを受け取る）。"""
+    task = _task_text(data, "task")
+    with app.connect() as conn:
+        folder = _task_folder(conn, task)
+    if folder is None:
+        return _task_failed(UNKNOWN_TASK)
+    return _outcome(open_folder(folder, runner=app.runner))
+
+
 def _api_reindex(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     app.request_update()
     return {"ok": True}
@@ -1323,6 +1334,7 @@ def _finite(value: float) -> bool:
 
 
 _ACTIONS = {"/api/resume": _api_resume, "/api/open": _api_open, "/api/open-place": _api_open_place,
+            "/api/open-task": _api_open_task,
             "/api/reindex": _api_reindex, "/api/task-new": _api_task_new, "/api/task-stage": _api_task_stage,
             "/api/task-waiting": _api_task_waiting, "/api/task-settings": _api_task_settings,
             "/api/task-link": _api_task_link, "/api/ticket-url": _api_ticket_url,

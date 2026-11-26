@@ -1155,6 +1155,19 @@ class TaskServerTest(ServerCase):
         again = self.action("/api/task-prep", {"task": "2026-11-20-a", "item": "rule"}).json()
         self.assertEqual((again["ok"], again["message"]), (True, "もう整っています"))
 
+    def test_open_task_folder_in_finder(self):
+        folder = os.path.join(self.tasks_root, "2026-11-20-a")
+        r = self.action("/api/open-task", {"task": "2026-11-20-a"})
+        self.assertEqual(r.json(), {"ok": True, "needs_confirm": False, "message": "開きました"})
+        self.assertEqual(self.calls[-1], ["open", folder])
+        n = len(self.calls)
+        for task in ("nope", "../2026-11-20-a", "shared"):
+            self.assertEqual(self.action("/api/open-task", {"task": task}).json()["message"], "台帳にないタスクです")
+        self.assertEqual(self.action("/api/open-task", {}).status, 400)
+        self.assertEqual(self.post("/api/open-task", {"task": "2026-11-20-a"}, cookie=True, origin=self.origin).status,
+                         403)
+        self.assertEqual(len(self.calls), n)
+
     def test_task_card_lists_work_files(self):
         path = os.path.join(self.tasks_root, "2026-11-20-a", "check.sql")
         write_file(path, "select 1;\n")
