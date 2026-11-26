@@ -209,6 +209,9 @@ class UiAssetsTest(unittest.TestCase):
         self.assertIn("setSelectionRange", _function(js, "setupDetail") + _function(js, "restoreConversationBox"))
         load = js[js.index("function load(name, url, force)"):js.index("function failPane")]
         self.assertLess(load.index("conversationBoxState()"), load.index("pane.node.innerHTML = text"))
+        # 打っていた途中の欄を戻すのは、会話の中を探した結果の入れ替えだけ（戻る・進むなどの入れ替えでは戻さない）
+        self.assertIn("url === convSearchUrl", load)
+        self.assertIn("convSearchUrl = detailUrl(", _function(js, "runConversationSearch"))
         self.assertLess(load.index("pane.node.innerHTML = text"), load.index("restoreConversationBox("))
 
     def test_conversation_moves_across_unloaded_hits(self):

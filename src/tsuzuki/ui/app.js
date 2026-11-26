@@ -143,6 +143,7 @@ let hitTurns = []; // 会話の中の検索で一致したターン（古い順�
 let pendingStop = ""; // 一致したターンの周りを出し直したあとに止まる所："first"（そのターンの最初）か "last"（最後）
 let scrollToStop = false; // 出し直したあと、止まる所を画面の真ん中へ送るか（会話の中を探したときと、移ったとき）
 let convTimer = 0;
+let convSearchUrl = ""; // 会話の中を探した結果の断片の URL（その入れ替えのときだけ、打っていた途中の欄を戻す）
 let revealedKey = ""; // 一覧で最後に見える所へ動かした選択
 const expanded = new Set(); // 子の一覧を開いている親のセッション
 let writing = false; // タスクに書く操作を送っている途中（続けて押しても、2つ目は送らない）
@@ -400,7 +401,9 @@ function load(name, url, force) {
       // 取り直しの入れ替えで、左の列の入力欄（開いているもの）の入力を消さない。閉じたあとの取り直しで追いつく
       if (force && name === "left" && pane.node.querySelector("form:not([hidden])")) return true;
       const prepOpen = name === "detail" && force && pane.node.querySelector("details.prep[open]") !== null;
-      const typing = name === "detail" ? conversationBoxState() : null; // 会話の中の検索の欄に打っている途中
+      // 会話の中を探した結果の入れ替えなら、打っている途中の欄を戻す（戻る・進むなどでは戻さない）
+      const typing = name === "detail" && url === convSearchUrl ? conversationBoxState() : null;
+      if (name === "detail") convSearchUrl = "";
       pane.html = text;
       pane.node.innerHTML = text; // 断片はサーバーがエスケープ済み
       if (typing) restoreConversationBox(typing);
@@ -796,8 +799,10 @@ function runConversationSearch() {
   if (!box) return;
   const value = box.value.trim();
   if (value === state.cq) return;
+  const turn = currentTurn() || "";
+  convSearchUrl = detailUrl(normalize(Object.assign({}, state, { cq: value, t: turn })));
   scrollToStop = true;
-  go({ cq: value, t: currentTurn() || "" }, false);
+  go({ cq: value, t: turn }, false);
 }
 
 // 断片を入れ替える前の、会話の中の検索の欄（焦点があるときだけ）。入れ替えたあと restoreConversationBox で戻す
