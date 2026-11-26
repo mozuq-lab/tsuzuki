@@ -144,6 +144,7 @@ let pendingStop = ""; // 一致したターンの周りを出し直したあと�
 let scrollToStop = false; // 出し直したあと、止まる所を画面の真ん中へ送るか（会話の中を探したときと、移ったとき）
 let convTimer = 0;
 let convSearchUrl = ""; // 会話の中を探した結果の断片の URL（その入れ替えのときだけ、打っていた途中の欄を戻す）
+let convComposing = false; // 会話の中の検索の欄で、日本語を変換している途中
 let revealedKey = ""; // 一覧で最後に見える所へ動かした選択
 const expanded = new Set(); // 子の一覧を開いている親のセッション
 let writing = false; // タスクに書く操作を送っている途中（続けて押しても、2つ目は送らない）
@@ -795,6 +796,7 @@ function scheduleConversationSearch() {
 // 会話の中を探す。上の検索窓の q と左の一覧は変えない。今読んでいる所から下の一致へ移る
 function runConversationSearch() {
   clearTimeout(convTimer);
+  if (convComposing) return; // 変換の途中では探さない（確定したら compositionend がもう一度予定を入れる）
   const box = ui.detail.querySelector(".conv-q");
   if (!box) return;
   const value = box.value.trim();
@@ -815,6 +817,14 @@ function conversationBoxState() {
 }
 
 // 打っていた途中の欄を戻す（同じ会話のときだけ）。待つ間に打ち足していれば、もう一度探す
+// 探した結果を一致の周りへ出し直すとき、欄に打っていた途中なら、その入れ替えでも欄を戻す
+function keepConversationBox(changes) {
+  const box = ui.detail.querySelector(".conv-q");
+  if (box && document.activeElement === box) {
+    convSearchUrl = detailUrl(normalize(Object.assign({}, state, changes)));
+  }
+}
+
 function restoreConversationBox(typing) {
   const box = ui.detail.querySelector(".conv-q");
   const back = ui.detail.querySelector(".conv .back");
@@ -868,6 +878,7 @@ function setupDetail() {
   marks = [];
   markIndex = -1;
   hitTurns = [];
+  convComposing = false; // 入れ替えた欄は、変換の途中ではない
   const wanted = pendingStop;
   const scroll = scrollToStop;
   pendingStop = "";
@@ -900,6 +911,7 @@ function setupDetail() {
     if (target !== undefined && !loaded(target) && !wanted) {
       pendingStop = "first";
       scrollToStop = true;
+      keepConversationBox({ t: String(target) });
       go({ t: String(target) }, false);
       return;
     }
@@ -923,6 +935,7 @@ function setupDetail() {
       if (below !== undefined && !wanted) {
         pendingStop = "first";
         scrollToStop = true;
+        keepConversationBox({ t: String(below) });
         go({ t: String(below) }, false);
         return;
       }
@@ -1815,8 +1828,17 @@ ui.q.addEventListener("input", (event) => {
 });
 ui.q.addEventListener("compositionend", scheduleSearch);
 document.addEventListener("input", onConversationInput); // 会話の中の検索の欄は、断片を入れ替えても効くように
+document.addEventListener("compositionstart", (event) => {
+  if (event.target.matches && event.target.matches(".conv-q")) {
+    clearTimeout(convTimer); // 確定や空白で掛かった予定が、次の語の変換の途中で切れないように
+    convComposing = true;
+  }
+});
 document.addEventListener("compositionend", (event) => {
-  if (event.target.matches && event.target.matches(".conv-q")) scheduleConversationSearch();
+  if (event.target.matches && event.target.matches(".conv-q")) {
+    convComposing = false;
+    scheduleConversationSearch();
+  }
 });
 ui.confirm.addEventListener("click", (event) => {
   if (event.target === ui.confirm) hideContinue(); // 枠の外を押したら、やめる

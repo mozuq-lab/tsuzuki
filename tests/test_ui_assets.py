@@ -214,6 +214,28 @@ class UiAssetsTest(unittest.TestCase):
         self.assertIn("convSearchUrl = detailUrl(", _function(js, "runConversationSearch"))
         self.assertLess(load.index("pane.node.innerHTML = text"), load.index("restoreConversationBox("))
 
+    def test_conversation_search_waits_for_the_ime(self):
+        # 変換が始まったら、掛かっている検索の予定を止める。変換の途中では探さない
+        js = _asset("app.js")
+        start = js[js.index('document.addEventListener("compositionstart"'):]
+        start = start[:start.index("});")]
+        self.assertIn(".conv-q", start)
+        self.assertIn("clearTimeout(convTimer)", start)
+        self.assertIn("convComposing = true", start)
+        self.assertIn("convComposing = false", js[js.index('document.addEventListener("compositionend"'):])
+        self.assertIn("if (convComposing) return;", _function(js, "runConversationSearch"))
+
+    def test_conversation_keeps_the_box_when_it_jumps_to_a_far_hit(self):
+        # 探した結果を一致の周りへ出し直すときも、欄に打っていた途中なら、その入れ替えで欄を戻す
+        js = _asset("app.js")
+        setup = _function(js, "setupDetail")
+        self.assertEqual(setup.count("go({ t: String("), 2)
+        self.assertEqual(setup.count("keepConversationBox("), 2)
+        for at in [i for i in range(len(setup)) if setup.startswith("go({ t: String(", i)]:
+            self.assertIn("keepConversationBox(", setup[max(0, at - 160):at])
+        self.assertIn("convSearchUrl = detailUrl(", _function(js, "keepConversationBox"))
+        self.assertIn("document.activeElement", _function(js, "keepConversationBox"))
+
     def test_conversation_moves_across_unloaded_hits(self):
         js = _asset("app.js")
         stops = _function(js, "conversationStops")
