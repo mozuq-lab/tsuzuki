@@ -19,6 +19,7 @@ from tsuzuki.sources.history import sync_history
 from tsuzuki.sources.lineage import sync_lineage
 from tsuzuki.store import REREAD_KEY, get_meta, set_meta
 from tsuzuki.taskindex import sync_tasks
+from tsuzuki.taskrename import rewrite_doc_links
 from tsuzuki.tasklinks import RELINK_KEY, link_tasks
 from tsuzuki.tasks import within as task_within
 
@@ -89,12 +90,14 @@ def update(conn: sqlite3.Connection, cfg: Config, *, claude_dir: Path, ledger_di
         errors = _sync_history_and_lineage(conn, cfg, claude_dir, ledger_dir, places)
         _assign_places(conn, places)
         docs = _update_documents(conn, cfg, home, results, places, now(), tasks)
+        rewrite_doc_links(conn)  # 前のフォルダー名のパスを今のパスに（取り込んだ分も、前の回の台帳の分も）
         relations = infer_relations(conn)
         if tasks is not None:
             sync = sync_tasks(conn, cfg, tasks_root=tasks, home=home, places=places)
             if sync.error:
                 errors.append(sync.error)
-            _relink_tasks(conn, cfg, tasks, changed=sync.changed or bool(results))
+            renamed = rewrite_doc_links(conn)  # 今回の同期で前の名前が増えた分
+            _relink_tasks(conn, cfg, tasks, changed=sync.changed or bool(results) or renamed > 0)
         warning = _check_format(conn, results)
         # 更新の途中で forget・purge が終わっていれば、この回が作り直したそのセッションの行を消す
         drop_forgotten(conn)

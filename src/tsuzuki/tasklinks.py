@@ -9,6 +9,7 @@ import sqlite3
 from typing import Dict, List, NamedTuple, Optional, Pattern, Sequence, Set, Tuple
 
 from tsuzuki.store import set_meta
+from tsuzuki.taskrename import current_path, former_folders
 from tsuzuki.tasks import TASK_MD, ticket_numbers, within
 
 # （規則、確かさ、画面の言葉）を強い順に。自動の規則は1つのセッションを1つのタスクにだけ結び付け、
@@ -75,7 +76,7 @@ def link_tasks(conn: sqlite3.Connection, *, tasks_root: str, default_branches: S
         if action == "add" and task in tasks and sid in sessions:
             manual.setdefault(sid, []).append((task, at))
 
-    direct = _direct_links(conn, root, tasks, sessions, removed)
+    direct = _direct_links(conn, root, tasks, sessions, removed, former_folders(conn))
     linked = _inherit_links(conn, sessions, direct, manual, removed)
     trusted = _trusted_links(linked, manual)
     repos = _resolve_repos(root, tasks, sessions, trusted)
@@ -119,7 +120,7 @@ def _load_sessions(conn: sqlite3.Connection) -> Dict[str, _Session]:
 
 
 def _direct_links(conn: sqlite3.Connection, root: str, tasks: Dict[str, _Task], sessions: Dict[str, _Session],
-                  removed: Set[Tuple[str, str]]) -> Dict[str, Link]:
+                  removed: Set[Tuple[str, str]], former: Dict[str, str]) -> Dict[str, Link]:
     """直接の根拠（表の上から、手で足した以外の5つ）。セッションごとに最も強い規則のタスクを1つ選び、同じ規則なら
     根拠の時刻（cwd はセッションの開始）が最も新しいタスクを選ぶ。shared/ はタスクではないので数えない。"""
     folders = {t.path: name for name, t in tasks.items()}
@@ -131,7 +132,7 @@ def _direct_links(conn: sqlite3.Connection, root: str, tasks: Dict[str, _Task], 
 
     for sid, s in sessions.items():
         if s.cwd:
-            add(sid, "cwd", s.started, _folder_task(s.cwd, folders))
+            add(sid, "cwd", s.started, _folder_task(current_path(s.cwd, former) or s.cwd, folders))  # 前の名前の中も今のタスク
     low, high = root.rstrip("/") + "/", root.rstrip("/") + "0"  # root の下のパス（"/" の次の文字が "0"）
     for sid, path, rel, ts, index in conn.execute(
             "SELECT session_id, path, rel, ts, prompt_index FROM doc_links WHERE path >= ? AND path < ?", (low, high)):

@@ -499,6 +499,24 @@ class IndexerTest(unittest.TestCase):
         self.assertTrue(done.is_set())
         self.assertEqual(count(self.conn, "sessions"), 1)
 
+    def test_former_folder_survives_a_rebuild(self):
+        ctx = allow_system_tmp()
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+        root = os.path.join(self.d, "tasks")
+        write_file(os.path.join(root, "2026-11-19-search", "task.md"),
+                   "---\ntitle: s\nformer_names: 2026-11-19-serch\n---\n# s\n")
+        old = os.path.join(root, "2026-11-19-serch")
+        sid = "00000000-0000-4000-8000-000000000077"
+        self.fake.write(old, sid, [user("調べて", t(0), sid, old),
+                                   assistant(t(1), sid, old, tools=[("Write", {"file_path": old + "/notes.md"})])])
+        update(self.conn, self.cfg, claude_dir=self.fake.dir, ledger_dir=self.ledger, home=self.home,
+               tasks_root=Path(root))
+        paths = [r[0] for r in self.conn.execute("SELECT path FROM doc_links WHERE session_id = ?", (sid,))]
+        self.assertEqual(paths, [os.path.join(root, "2026-11-19-search", "notes.md")])
+        rows = [tuple(r) for r in self.conn.execute("SELECT task, session_id, rule FROM task_sessions")]
+        self.assertEqual(rows, [("2026-11-19-search", sid, "cwd")])
+
     def test_tmp_cwd_rules(self):
         repo = make_git_repo(self.d, "repo")
         other = make_git_repo(self.d, "other")

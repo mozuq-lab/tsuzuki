@@ -50,6 +50,10 @@ class LinkTasksTest(unittest.TestCase):
             self.conn.execute("INSERT INTO doc_links(session_id, path, rel, ts, prompt_index) VALUES (?, ?, ?, ?, ?)",
                               (sid, path, rel, ts, prompt_index))
 
+    def set_former(self, name, former):
+        with self.conn:
+            self.conn.execute("UPDATE tasks SET former = ? WHERE name = ?", (former, name))
+
     def add_relation(self, src, dst, type, confidence="confirmed"):
         with self.conn:
             self.conn.execute("INSERT INTO relations(src, dst, type, confidence, evidence)"
@@ -495,6 +499,21 @@ class LinkTasksTest(unittest.TestCase):
         self.assertEqual(get_meta(self.conn, RELINK_KEY), "1")
         with self.assertRaises(ValueError):
             set_override(self.conn, "2026-11-20-a", "s1", "toggle", now_iso="2026-11-22T02:00:00Z")
+
+
+    def test_session_started_in_a_former_folder_links_to_the_task(self):
+        self.set_former("2026-11-20-a", '["2026-11-19-serch"]')
+        self.add_session("s1", cwd=T + "/2026-11-19-serch/sub")
+        link_tasks(self.conn, tasks_root=T, default_branches=("main",))
+        self.assertEqual(self.links(), {("2026-11-20-a", "s1"): ("cwd", "confirmed")})
+        cwd = self.conn.execute("SELECT cwd FROM sessions WHERE id = 's1'").fetchone()[0]
+        self.assertEqual(cwd, T + "/2026-11-19-serch/sub")  # sessions.cwd は書き換えない
+
+    def test_former_name_equal_to_an_existing_task_links_to_that_task(self):
+        self.set_former("2026-11-20-a", '["2026-11-21-b"]')
+        self.add_session("s1", cwd=B + "/sub")
+        link_tasks(self.conn, tasks_root=T, default_branches=("main",))
+        self.assertEqual(self.links(), {("2026-11-21-b", "s1"): ("cwd", "confirmed")})
 
 
 class UpdateTest(unittest.TestCase):
