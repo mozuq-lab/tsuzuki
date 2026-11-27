@@ -130,6 +130,7 @@ def _sync_one(conn, cfg: Config, root: str, home: str, task_dir: str, place_id: 
         "frontmatter_ok": 1 if tf.frontmatter_ok else 0,
         "sections": json.dumps(tf.sections, ensure_ascii=False),
         "refs": json.dumps(ref_paths(tf.sections.get("資料"), task_dir, home), ensure_ascii=False),
+        "former": json.dumps(tf.former_names, ensure_ascii=False),
         "md_mtime": st.st_mtime, "md_size": st.st_size, "files_mtime": signature if ok else 0.0,
     }
     return _write_row(conn, name, values)

@@ -43,6 +43,22 @@ class TaskFile:
     heading: Optional[str] = None
     sections: Dict[str, str] = field(default_factory=dict)
     frontmatter_ok: bool = False
+    former_names: List[str] = field(default_factory=list)  # 前のフォルダー名（古い順）
+
+
+def parse_former_names(value: Optional[str]) -> List[str]:
+    """`a, b` の形の前のフォルダー名を一覧にする。空・/ を含む・. で始まる名前は捨て、重なりは最初の1つだけ残す。"""
+    names: List[str] = []
+    for raw in (value or "").split(","):
+        name = raw.strip()
+        if not name or "/" in name or name.startswith(".") or name in names:
+            continue
+        names.append(name)
+    return names
+
+
+def format_former_names(names: Sequence[str]) -> str:
+    return ", ".join(names)
 
 
 def stage_label(stage: str) -> str:
@@ -87,6 +103,7 @@ def parse_task_md(text: str) -> TaskFile:
         tf.created = meta.get("created") or None
         tf.updated = meta.get("updated") or None
         tf.waiting = meta.get("waiting", "").lower() == "true"
+        tf.former_names = parse_former_names(meta.get("former_names"))
         raw = meta.get("stage")
         if raw is not None:
             tf.stage_raw = raw

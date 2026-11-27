@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 LEDGER_FILENAME = "ledger.db"
 
 _TABLES = """
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   frontmatter_ok INTEGER NOT NULL DEFAULT 1,
   sections TEXT NOT NULL DEFAULT '{}',
   refs TEXT NOT NULL DEFAULT '[]',
+  former TEXT NOT NULL DEFAULT '[]',
   md_mtime REAL NOT NULL DEFAULT 0, md_size INTEGER NOT NULL DEFAULT 0,
   files_mtime REAL NOT NULL DEFAULT 0
 );
@@ -81,6 +82,7 @@ CREATE INDEX IF NOT EXISTS history_prompts_ts ON history_prompts(ts);
 # 版を上げたときに、前の版の台帳の表へ足す列（CREATE TABLE IF NOT EXISTS は、ある表に列を足さない）
 _ADDED_COLUMNS = [
     ("sessions", "pending_commands", "TEXT"),  # 版2：応答を待っているスラッシュコマンド（JSON）
+    ("tasks", "former", "TEXT NOT NULL DEFAULT '[]'"),  # 版4：前のフォルダー名（JSON）
 ]
 # 版を上げたときに付ける印。次の更新が、記録の残っているセッションを新しい読み方で読み直す（indexer）
 REREAD_KEY = "reread_transcripts"
@@ -169,8 +171,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         if trigram:
             for name, table, rowid, cols in _FTS:
                 _create_fts(conn, name, table, rowid, cols)
-        # 版2から版3は表を足すだけ（タスクの置き場所は新しい機能なので、読み直す記録はない）
-        if old_version is not None and old_version not in (str(SCHEMA_VERSION), "2"):
+        # 版2から版4は表と列を足すだけ（タスクの置き場所は新しい機能なので、読み直す記録はない）
+        if old_version is not None and old_version not in (str(SCHEMA_VERSION), "3", "2"):
             set_meta(conn, REREAD_KEY, "1")
         set_meta(conn, "schema_version", str(SCHEMA_VERSION))
         set_meta(conn, "fts", "trigram" if trigram else "none")

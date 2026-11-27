@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from tsuzuki.tasks import (
-    created_from_name, discover_tasks, is_task_dir_name, list_task_files, no_waiting,
+    created_from_name, discover_tasks, format_former_names, is_task_dir_name, list_task_files, no_waiting,
     parse_task_md, ref_paths, stage_label, task_doc_kind, task_title, ticket_numbers, ticket_pieces)
 
 SAMPLE = (
@@ -34,6 +34,13 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(tf.frontmatter_ok)
         self.assertEqual(tf.sections["次の一手"], "- 結合テストを通す")
         self.assertEqual(tf.sections["待っていること"], "なし")
+
+    def test_former_names_are_read(self):
+        tf = parse_task_md("---\ntitle: a\nformer_names: 2026-11-19-serch, ../x, .hidden, , "
+                           "2026-11-19-serch, b/c, old\n---\n# a\n")
+        self.assertEqual(tf.former_names, ["2026-11-19-serch", "old"])
+        self.assertEqual(parse_task_md("# a\n").former_names, [])
+        self.assertEqual(format_former_names(["a", "b"]), "a, b")
 
     def test_workspace_is_read(self):
         tf = parse_task_md("---\ntitle: x\nworkspace: /w/a.code-workspace\n---\n")

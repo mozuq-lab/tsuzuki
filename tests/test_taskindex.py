@@ -53,6 +53,13 @@ class TaskIndexTest(unittest.TestCase):
         displays = {r[0] for r in self.conn.execute("SELECT display FROM places")}
         self.assertTrue({"タスク", "共通の資料"} <= displays)
 
+    def test_former_names_are_stored(self):
+        write_file(self.root + "/2026-11-22-new/task.md", "---\ntitle: n\nformer_names: 2026-11-19-old\n---\n# n\n")
+        self.sync()
+        former = dict(self.conn.execute("SELECT name, former FROM tasks"))
+        self.assertEqual(former["2026-11-22-new"], '["2026-11-19-old"]')
+        self.assertEqual(former["2026-11-21-csv"], "[]")
+
     def test_row_values(self):
         self.sync()
         row = self.conn.execute("SELECT title, ticket, repo, created, frontmatter_ok, refs, sections "

@@ -24,11 +24,24 @@ class StoreTest(unittest.TestCase):
         self.addCleanup(self._tmpdir.cleanup)
         self.tmp = Path(self._tmpdir.name)
 
-    def test_v3_tables(self):
+    def test_v4_tables(self):
         conn = make_ledger(self.tmp)
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         self.assertTrue({"tasks", "task_sessions", "task_overrides"} <= names)
-        self.assertEqual(get_meta(conn, "schema_version"), "3")
+        self.assertEqual(get_meta(conn, "schema_version"), "4")
+        self.assertIn("former", {r[1] for r in conn.execute("PRAGMA table_info(tasks)")})
+
+    def test_upgrade_from_v3_adds_the_former_column_without_rereading(self):
+        conn = make_ledger(self.tmp)
+        with conn:
+            conn.execute("ALTER TABLE tasks DROP COLUMN former")
+        set_meta(conn, "schema_version", "3")
+        conn.commit()
+        conn.close()
+        conn = make_ledger(self.tmp)
+        self.assertEqual(get_meta(conn, "schema_version"), "4")
+        self.assertIn("former", {r[1] for r in conn.execute("PRAGMA table_info(tasks)")})
+        self.assertIsNone(get_meta(conn, REREAD_KEY))  # 版3からは、記録を読み直さない
 
     def test_upgrade_from_v2_keeps_rows(self):
         conn = make_ledger(self.tmp)
@@ -37,7 +50,7 @@ class StoreTest(unittest.TestCase):
         downgrade_to_v2(conn)
         conn.close()
         conn = make_ledger(self.tmp)
-        self.assertEqual(get_meta(conn, "schema_version"), "3")
+        self.assertEqual(get_meta(conn, "schema_version"), "4")
         self.assertEqual(count(conn, "sessions"), 1)
         self.assertEqual(count(conn, "tasks"), 0)
         self.assertIsNone(get_meta(conn, REREAD_KEY))
@@ -47,7 +60,7 @@ class StoreTest(unittest.TestCase):
             p = Path(d) / "ledger.db"
             open_ledger(p).close()
             conn = open_ledger(p)
-            self.assertEqual(get_meta(conn, "schema_version"), "3")
+            self.assertEqual(get_meta(conn, "schema_version"), "4")
             self.assertEqual(get_meta(conn, "fts"), "trigram")
             self.assertIsNone(get_meta(conn, "reread_transcripts"))  # 新しい台帳には読み直す記録がない
             self.assertEqual(stat.S_IMODE(p.stat().st_mode), 0o600)
