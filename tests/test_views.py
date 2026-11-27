@@ -163,6 +163,15 @@ class IngestedSessionTest(LedgerCase):
         self.assertEqual(d.children_total, 1)
         self.assertEqual(d.resume_command, "cd /w && claude --resume " + S1)
 
+    def test_resume_command_in_a_renamed_folder(self):
+        new = os.path.join(self.d, "t", "2026-11-19-search")
+        os.makedirs(new)
+        self.conn.execute("INSERT INTO tasks(name, path, title, stage, former) VALUES (?, ?, ?, '調査', ?)",
+                          ("2026-11-19-search", new, "x", '["2026-11-19-serch"]'))
+        self.conn.execute("UPDATE sessions SET cwd = ? WHERE id = ?", (os.path.join(self.d, "t", "2026-11-19-serch"), S1))
+        d = session_detail(self.conn, S1, live={}, home=HOME)
+        self.assertEqual(d.resume_command, "cd %s && claude --resume %s" % (new, S1))
+
     def test_list_hides_headless_and_empty(self):
         self.assertEqual({r.kind for r in list_sessions(self.conn, live={})}, {"interactive"})
         self.assertIn("headless", {r.kind for r in list_sessions(self.conn, include_headless=True, live={})})

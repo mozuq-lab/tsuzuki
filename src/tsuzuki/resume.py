@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional
 
 from tsuzuki.config import Config
 from tsuzuki.sources.live import LiveSession
+from tsuzuki.taskrename import current_path, former_folders
 from tsuzuki.taskstart import start_dir
 from tsuzuki.tasks import TASK_MD, at_reference
 from tsuzuki.vscode_ext import NOT_INSTALLED, VSCodeTerminal
@@ -18,6 +19,8 @@ from tsuzuki.vscode_ext import NOT_INSTALLED, VSCodeTerminal
 VSCODE_URI = "vscode://anthropic.claude-code/open?session={session_id}"
 VSCODE_PROMPT_URI = "vscode://anthropic.claude-code/open?prompt={prompt}"
 NO_WORKSPACE = "ワークスペースが見つかりません: %s"
+PANEL_MOVED = ("名前を変える前のフォルダーで始めた会話は、VS Code のパネルでは再開できません。"
+               "Terminal か VS Code のターミナルで開いてください")
 STEP_TIMEOUT = 10  # 外のコマンド1つあたりの待ち秒数
 REASON_CHARS = 200  # 失敗の理由として出す、外のコマンドの stderr の1行の長さの上限
 
@@ -156,7 +159,14 @@ def resume(conn: sqlite3.Connection, session_id: str, how: str, *, cfg: Config, 
     if not row[1]:
         return ActionOutcome(False, False, "記録は削除済みのため再開できません")
     if not cwd or not isdir(cwd):
-        return ActionOutcome(False, False, "作業ディレクトリが見つかりません: %s" % cwd)
+        # 台帳の cwd は始めたときのままなので、名前を変えたフォルダーなら今のパスに読み替える
+        moved = current_path(cwd, former_folders(conn)) if cwd else None
+        if not moved or not isdir(moved):
+            return ActionOutcome(False, False, "作業ディレクトリが見つかりません: %s" % cwd)
+        if how == "vscode":
+            # パネルは窓のフォルダーの中しか探さず、なければ黙って新しい会話を始めてしまう
+            return ActionOutcome(False, False, PANEL_MOVED)
+        cwd = moved
     if session_id in live and not confirm:
         return ActionOutcome(False, True, "このセッションは今開いています。続けますか？")
     if how == "vscode":

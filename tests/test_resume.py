@@ -13,7 +13,7 @@ from unittest import mock
 
 from tsuzuki import cli
 from tsuzuki.config import Config
-from tsuzuki.resume import (ActionOutcome, applescript_quote, is_session_id, open_document, open_folder, open_place, resume,
+from tsuzuki.resume import (PANEL_MOVED, ActionOutcome, applescript_quote, is_session_id, open_document, open_folder, open_place, resume,
                            resume_command, run_steps, terminal_steps, vscode_steps, conversation_prompt,
                            new_conversation_command, vscode_new_steps, terminal_new_steps, start_conversation,
                            NO_WORKSPACE)
@@ -93,6 +93,33 @@ class ResumeTest(unittest.TestCase):
         out = self.go(live=live, confirm=True)
         self.assertEqual((out.ok, out.message), (True, "VS Code で開きました"))
         self.assertEqual(len(self.calls), 2)
+
+    def _renamed(self):
+        """名前を変えたタスクのフォルダー（今の名前だけがある）と、前の名前で始めた会話。"""
+        new = os.path.join(self.d, "t", "2026-11-19-search")
+        old = os.path.join(self.d, "t", "2026-11-19-serch")
+        os.makedirs(new)
+        self.conn.execute("INSERT INTO tasks(name, path, title, stage, former) VALUES (?, ?, ?, '調査', ?)",
+                          ("2026-11-19-search", new, "x", '["2026-11-19-serch"]'))
+        self.conn.execute("UPDATE sessions SET cwd = ? WHERE id = ?", (old, SID))
+        return new, old
+
+    def test_resume_in_a_renamed_folder(self):
+        new, old = self._renamed()
+        isdir = lambda p: p == new
+        out = self.go(how="terminal", isdir=isdir)
+        self.assertTrue(out.ok)
+        self.assertIn("cd %s && claude --resume %s" % (new, SID), self.calls[0][2])
+        self.calls.clear()
+        out = self.go(how="vscode", isdir=isdir)
+        self.assertEqual((out.ok, out.message), (False, PANEL_MOVED))
+        self.assertEqual(self.calls, [])
+
+    def test_missing_folder_without_former_name_still_refuses(self):
+        new, old = self._renamed()
+        self.conn.execute("UPDATE sessions SET cwd = ? WHERE id = ?", (os.path.join(self.d, "t", "other"), SID))
+        out = self.go(how="terminal", isdir=lambda p: p == new)
+        self.assertEqual((out.ok, out.message), (False, "作業ディレクトリが見つかりません: %s" % os.path.join(self.d, "t", "other")))
 
     def test_terminal_success(self):
         out = self.go(how="terminal")
