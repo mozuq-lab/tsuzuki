@@ -515,6 +515,7 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
   font-size: 12px;
   overflow-wrap: normal;
 }
+.md pre.hscroll { padding-bottom: calc(.5rem + 12px); }
 .md code { font-family: var(--mono); font-size: 12px; }
 .md :not(pre) > code { padding: 0 .25rem; border-radius: 4px; background: var(--bg-tertiary); }
 .md blockquote { margin: .4rem 0; padding: 0 .8rem; border-left: 3px solid var(--border); color: var(--text-secondary); }

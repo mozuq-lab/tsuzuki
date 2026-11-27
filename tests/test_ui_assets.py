@@ -721,6 +721,18 @@ class SmallFixesAssetsTest(unittest.TestCase):
             self.assertIn(rule, outside)
         self.assertNotIn(".dh", narrow)
 
+    def test_wide_code_gets_room_for_an_overlay_scrollbar(self):
+        js, css = _asset("app.js"), _asset("app.css")
+        mark = _function(js, "markWideCode")
+        self.assertIn(".md pre", mark)
+        self.assertIn("scrollWidth > ", mark)
+        self.assertIn("offsetHeight === ", mark)  # バーが場所を取る設定（常に表示）では付けない
+        self.assertIn('classList.toggle("hscroll"', mark)
+        self.assertIn("markWideCode()", _function(js, "setupDetail"))
+        self.assertIn("markWideCode()", _function(js, "readMore"))
+        self.assertIn("ResizeObserver", js)  # 「中央を畳む」や窓の幅で、右のペインの幅が変わったとき
+        self.assertIn("padding-bottom: calc(.5rem + 12px)", _rule(css, ".md pre.hscroll"))
+
 
 class MermaidAssetsTest(unittest.TestCase):
     """Markdown の資料の Mermaid の図。"""

@@ -854,7 +854,17 @@ async function readMore(button) {
   button.remove();
   if (anchor) ui.detail.scrollTop += anchor.getBoundingClientRect().top - top;
   setupMermaid(); // 読み足した発言の図
+  markWideCode();
   refreshMarks();
+}
+
+// 横にはみ出すコードに印（hscroll）を付ける。macOS の重ねて描くスクロールバーは場所を取らず、
+// 最後の行に被さるので、印の付いた pre は CSS で下に余白を取る。バーが場所を取る設定（常に表示）では
+// offsetHeight が clientHeight より大きくなるので、印は付けない
+function markWideCode() {
+  ui.detail.querySelectorAll(".md pre").forEach((pre) => {
+    pre.classList.toggle("hscroll", pre.scrollWidth > pre.clientWidth && pre.offsetHeight === pre.clientHeight);
+  });
 }
 
 // 会話に読み足したあと、一致の印を数え直す（今の印はそのまま。まだなければ最初の印。スクロールはしない）
@@ -875,6 +885,7 @@ function refreshMarks() {
 function setupDetail() {
   mermaidFrames = []; // 前の表示の枠は、ペインを入れ替えたときに消えている
   setupMermaid();
+  markWideCode();
   marks = [];
   markIndex = -1;
   hitTurns = [];
@@ -1857,6 +1868,8 @@ ui.qClear.addEventListener("click", clearSearch);
 if (narrowWindow.addEventListener) narrowWindow.addEventListener("change", placeListOptions);
 else narrowWindow.addListener(placeListOptions);
 placeListOptions();
+// 中央を畳む・窓の幅を変えるなどで右のペインの幅が変わったら、はみ出すかどうかを見直す
+if (window.ResizeObserver) new ResizeObserver(markWideCode).observe(ui.detail);
 ui.q.value = state.q;
 if (history.state && Number.isInteger(history.state.n)) position = furthest = history.state.n;
 else history.replaceState({ n: 0 }, "");
