@@ -549,6 +549,7 @@ mark.cur { background: var(--mark-current); box-shadow: 0 0 0 1px var(--accent);
 /* 右：タスクのカード。段階、現在地と次の一手、欄、資料の3つの束、会話 */
 
 .task-card > .dh { margin-bottom: .4rem; }
+.task-card > .dh .meta .more { margin-left: .5rem; }  /* パスの後ろの「パスをコピー」「Finder で開く」を前とくっつけない */
 .btn.hint { box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 0 4px var(--accent); }  /* 作ったばかりのタスクの @task.md */
 .steps { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .2rem 0 .15rem; }
 .stp {

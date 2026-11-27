@@ -325,6 +325,11 @@ class UiAssetsTest(unittest.TestCase):
         self.assertNotIn("@import", css)  # 外から読まない
         self.assertNotRegex(css, r"url\(\s*['\"]?(https?:)?//")
 
+    def test_task_card_meta_buttons_have_room(self):
+        # パスの後ろの「パスをコピー」と「Finder で開く」は、前の文字やボタンとくっつけない
+        css = _asset("app.css")
+        self.assertIn("margin-left: .5rem", _rule(css, ".task-card > .dh .meta .more"))
+
     def test_back_and_forward_buttons(self):
         html = _asset("index.html")
         head = re.search(r'<header id="top">\s*(<button[^>]*>.*?</button>)\s*(<button[^>]*>.*?</button>)', html, re.S)
