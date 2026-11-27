@@ -1927,6 +1927,32 @@ class TaskServerTest(ServerCase):
             self.assertEqual([r[0] for r in conn.execute("SELECT name FROM tasks ORDER BY name")],
                              ["2026-11-20-a", "2026-11-22-ログイン"])
 
+    def test_rename_logs_ledger_failures(self):
+        # 名前を変えた後に台帳に書けなかったとき（答えは成功）と、元に戻した後に読み直せなかったときも、
+        # stderr に例外の種類と呼び出しの位置を1行だけ書く（例外の文は書かない）
+        err = io.StringIO()
+        with mock.patch.object(server, "link_tasks", side_effect=RuntimeError("秘密の中身")), \
+                contextlib.redirect_stderr(err):
+            r = self.settings("2026-11-20-a", short_name="b")
+        self.assertEqual((r["ok"], r["message"]),
+                         (True, "名前を変えました: 2026-11-20-b。ただし、台帳に書けなかったので、次の更新で読み直します"))
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("RuntimeError", lines[0])
+        self.assertRegex(lines[0], r"server\.py:\d+:_rename_task_folder")
+        self.assertNotIn("秘密", lines[0])
+        err = io.StringIO()
+        with mock.patch.object(server, "_reread_task", side_effect=RuntimeError("秘密の中身")), \
+                contextlib.redirect_stderr(err):
+            r = self.settings("2026-11-20-b", short_name="c", workspace=os.path.join(self.root, "none.code-workspace"))
+        self.assertFalse(r["ok"])
+        self.assertTrue(os.path.isdir(os.path.join(self.tasks_root, "2026-11-20-b")))  # 名前は戻した
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("RuntimeError", lines[0])
+        self.assertRegex(lines[0], r"server\.py:\d+:_undo_rename")
+        self.assertNotIn("秘密", lines[0])
+
     def test_rename_reports_both_paths_when_it_cannot_undo(self):
         old, new = (os.path.join(self.tasks_root, n) for n in ("2026-11-20-a", "2026-11-20-b"))
         real_rename, calls = os.rename, []

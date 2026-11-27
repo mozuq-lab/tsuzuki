@@ -108,6 +108,7 @@ TOO_LARGE = "要求が大きすぎます"
 LEDGER_BUSY = "台帳を読めませんでした（使用中かもしれません）"
 INTERNAL_ERROR = "内部のエラーが起きました"
 FAILURE_LOG = "tsuzuki: 要求の処理に失敗しました（%d %s）: %s"  # 状態コード、例外の種類、呼び出しの位置
+LEDGER_LATER_LOG = "tsuzuki: 台帳に書けなかったので、次の更新で読み直します（%s）: %s"  # 例外の種類、呼び出しの位置
 PORT_IN_USE = "ポート %d は使用中です。--port か設定 port で別の番号を指定してください"
 START_FAILED = "tsuzuki: サーバーを起動できませんでした: %s"
 UPDATE_FAILED = "更新に失敗しました: %s"
@@ -1143,7 +1144,8 @@ def _rename_task_folder(app: App, task: str, new_name: str, fields: Dict[str, st
             refresh_task(conn, app.cfg, tasks_root=str(root), home=app.home, name=new_name)
             rewrite_doc_links(conn)
             link_tasks(conn, tasks_root=str(root), default_branches=app.cfg.default_branches)
-        except Exception:  # フォルダーと task.md は書けている。台帳は次の更新が読み直す
+        except Exception as e:  # フォルダーと task.md は書けている。台帳は次の更新が読み直す
+            _log_ledger_later(e)
             done += RENAME_LEDGER_LATER
             app.request_update()
     app.forget_searches()
@@ -1166,8 +1168,8 @@ def _undo_rename(app: App, conn: sqlite3.Connection, task: str, moved: str, old:
     answer = _task_failed((RENAME_STUCK % (moved, old, reason)) if taken else RENAME_UNDONE % reason)
     try:
         _reread_task(app, conn, task)
-    except Exception:  # 台帳は次の更新が読み直す（答えは返す）
-        pass
+    except Exception as e:  # 台帳は次の更新が読み直す（答えは返す）
+        _log_ledger_later(e)
     return answer
 
 
@@ -1563,12 +1565,23 @@ def _ledger_busy(error: BaseException) -> bool:
 def _log_failure(code: int, error: BaseException) -> None:
     """500・503 にした失敗を stderr に1行で書く。例外の種類と呼び出しの位置（ファイル:行:関数）だけで、
     例外の文と要求の中身（URL の検索の語など）は書かない。"""
+    print(FAILURE_LOG % ((code,) + _error_place(error)), file=sys.stderr, flush=True)
+
+
+def _log_ledger_later(error: BaseException) -> None:
+    """名前を変えた（元に戻した）後に台帳に書けず、次の更新に任せた失敗を、_log_failure と同じ形で1行書く
+    （答えは返すので、500 にはしない）。"""
+    print(LEDGER_LATER_LOG % _error_place(error), file=sys.stderr, flush=True)
+
+
+def _error_place(error: BaseException) -> Tuple[str, str]:
+    """(例外の種類, 呼び出しの位置（ファイル:行:関数）)。例外の文は含めない。"""
     kind = type(error).__qualname__
     if type(error).__module__ != "builtins":
         kind = "%s.%s" % (type(error).__module__, kind)
     frames = " > ".join("%s:%d:%s" % (os.path.basename(frame.f_code.co_filename), line, frame.f_code.co_name)
                         for frame, line in traceback.walk_tb(error.__traceback__))
-    print(FAILURE_LOG % (code, kind, frames), file=sys.stderr, flush=True)
+    return kind, frames
 
 
 def _same(given: str, secret: str) -> bool:
