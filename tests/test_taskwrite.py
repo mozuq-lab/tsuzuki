@@ -15,7 +15,7 @@ from tsuzuki.taskwrite import (ALREADY_IN_TASK, BAD_SECTION_LINE, CANNOT_COPY, N
                               find_trash, normalize_short_name, normalize_ticket, render_task_md, section_text,
                               set_fields, set_waiting, trash_task, BAD_WORKSPACE, normalize_workspace,
                               replace_heading, update_settings, copy_into_task, place_tasks_readme,
-                              rename_task, renamed_folder_name, short_name_of)
+                              rename_task, renamed_folder_name, short_name_of, NOT_A_RENAME_TARGET)
 from tests.fixtures import allow_system_tmp, run_cli
 
 TEMPLATE = (
@@ -679,6 +679,35 @@ class RenameTest(_TmpCase):
         with self.assertRaises(TaskWriteError):
             rename_task(str(outside), self.root, "2026-11-19-y")
         self.assertTrue(outside.is_dir())
+
+    def test_helpers_round_trip(self):
+        for name in ("2026-11-19-serch-page", "notes", "2026-11-19"):
+            with self.subTest(name=name):
+                self.assertEqual(renamed_folder_name(name, short_name_of(name)), name)
+
+    def test_rename_refuses_a_dangling_symlink_at_the_target(self):
+        old = self.make_task("2026-11-19-serch")
+        os.symlink(str(self.base / "nowhere"), str(self.root / "2026-11-19-search"))
+        with self.assertRaises(TaskWriteError) as caught:
+            rename_task(old, self.root, "2026-11-19-search")
+        self.assertIn("もうあります", str(caught.exception))
+        self.assertTrue(os.path.isdir(old))
+
+    def test_rename_refuses_commas(self):
+        with self.assertRaises(TaskWriteError):
+            renamed_folder_name("2026-11-19-a", "a,b")
+        old = self.make_task("2026-11-19-a,b")
+        with self.assertRaises(TaskWriteError) as caught:
+            rename_task(old, self.root, "2026-11-19-c")
+        self.assertIn("Finder", str(caught.exception))
+        self.assertTrue(os.path.isdir(old))
+
+    def test_rename_refusal_for_a_non_task_folder_says_rename(self):
+        outside = self.base / "2026-11-19-x"
+        outside.mkdir()
+        with self.assertRaises(TaskWriteError) as caught:
+            rename_task(str(outside), self.root, "2026-11-19-y")
+        self.assertEqual(str(caught.exception), NOT_A_RENAME_TARGET % str(outside))
 
     def test_rename_task_reports_an_os_error(self):
         old = self.make_task("2026-11-19-serch")

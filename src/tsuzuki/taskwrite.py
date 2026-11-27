@@ -29,6 +29,9 @@ NOT_A_TASK_FOLDER = "ゴミ箱に入れられるのはタスクのフォルダ�
 NOT_A_COPY_TARGET = "コピー先はタスクのフォルダーだけです: %s"
 NOT_A_FILE = "資料が見つかりません: %s"
 NAME_TAKEN = "その名前のフォルダーがもうあります: %s"
+NOT_A_RENAME_TARGET = "名前を変えられるのはタスクのフォルダーだけです: %s"
+COMMA_IN_NAME = "フォルダーの名前に「,」は使えません（前の名前の記録で区切りに使うため）: %s"
+COMMA_IN_CURRENT = "今のフォルダー名に「,」があるので、ここでは名前を変えられません。Finder で変えてください: %s"
 CANNOT_RENAME = "名前を変えられませんでした（%s）"
 ALREADY_IN_TASK = "この資料はもうタスクのフォルダーの中にあります"
 CANNOT_COPY = "コピーできませんでした: %s"
@@ -194,29 +197,42 @@ def _check_task_folder(task_dir: str, tasks_root: Path, message: str) -> str:
     return real
 
 
+def _date_prefix(name: str) -> str:
+    """名前の頭の「YYYY-MM-DD-」（ハイフンまで）。なければ空。日付だけの名前には日付の頭がないとする。"""
+    date = created_from_name(name)
+    return date + "-" if date and name.startswith(date + "-") else ""
+
+
 def short_name_of(name: str) -> str:
     """フォルダー名の短い名前。YYYY-MM-DD- で始まればその後ろ、そうでなければ名前のまま。"""
-    date = created_from_name(name)
-    return name[len(date) + 1:] if date and name[len(date):len(date) + 1] == "-" and len(name) > len(date) + 1 else name
+    return name[len(_date_prefix(name)):] or name
 
 
 def renamed_folder_name(name: str, short_name: str) -> str:
     """name の日付を残して、短い名前だけを short_name に替えたフォルダー名。日付がなければ短い名前だけ。"""
     short = normalize_short_name(short_name)
-    date = created_from_name(name)
-    return "%s-%s" % (date, short) if date else short
+    if "," in short:
+        raise TaskWriteError(COMMA_IN_NAME % short)
+    return _date_prefix(name) + short
 
 
 def rename_task(task_dir: str, tasks_root: Path, new_name: str, *, claude_dir: Optional[Path] = None) -> str:
     """タスクのフォルダーを、置き場所の直下の new_name に名前を変え、新しいパスを返す。同じ置き場所の中の
     os.rename だけで、ほかのフォルダーは上書きしない（大文字小文字だけの違いは、同じフォルダーなので許す）。"""
-    real = _check_task_folder(task_dir, tasks_root, NOT_A_TASK_FOLDER)
+    real = _check_task_folder(task_dir, tasks_root, NOT_A_RENAME_TARGET)
     _refuse_claude_dir(tasks_root, claude_dir)
+    if "," in os.path.basename(real):
+        raise TaskWriteError(COMMA_IN_CURRENT % os.path.basename(real))
     if "/" in new_name or not is_task_dir_name(new_name):
         raise TaskWriteError("フォルダーの名前に使えない文字があります: %s" % new_name)
     target = os.path.join(os.path.dirname(real), new_name)
-    if os.path.lexists(target) and not os.path.samefile(real, target):
-        raise TaskWriteError(NAME_TAKEN % new_name)
+    if os.path.lexists(target):
+        try:
+            same = not os.path.islink(target) and os.path.samefile(real, target)
+        except OSError:
+            same = False
+        if not same:
+            raise TaskWriteError(NAME_TAKEN % new_name)
     try:
         os.rename(real, target)
     except OSError as e:
