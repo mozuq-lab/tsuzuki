@@ -32,6 +32,12 @@ const NUMBER = /^[0-9]{1,18}$/;
 const MERMAID_URL = "/mermaid-frame?v=11.17.2";
 const MERMAID_MAX_HEIGHT = 2000; // 枠の高さの上限（px）。これより高い図は、枠の中を動かして見る
 const MERMAID_MAX_ERROR = 300; // 出す失敗の文の上限（字）
+// タブ。右のペインに出す物（# の s・c・t・cq・d）と題とスクロールの位置を覚え、切り替えるたびに出し直す
+// （右のペインは1つのまま）。中央の一覧と左の絞り込みは、すべてのタブで共通。タブの一覧は sessionStorage に
+// 写す（読み込み直しでは残り、窓を閉じると消える。読み書きは try の中で、使えなくてもこの画面の間は効く）
+const TABS_KEY = "tsuzuki-tabs";
+const TAB_KEYS = ["s", "c", "t", "cq", "d"];
+const TAB_FALLBACK = { s: "セッション", d: "資料", p: "場所" }; // 見出しを読み込む前の題（鍵の種類ごと）
 
 // 表示の切り替え（自動 → ライト → ダーク → 自動）。自動のときは data-theme を付けず、localStorage のキーも持たない。
 // localStorage が使えなくても（読み書きは try の中）、自動のまま動く
@@ -119,6 +125,7 @@ const ui = {
   order: byId("opt-order"),
   back: byId("back"),
   forward: byId("forward"),
+  tabs: byId("tabs"),
 };
 
 // 各ペインに入っている断片。url が同じなら取り直さない（取りに行っている途中なら、その結果を待つ）
@@ -152,6 +159,14 @@ let writeSlow = false; // 送っている書く操作の答えが WRITE_WAIT_MS 
 let toastWaits = false; // 知らせに出ているのが、答えを待っている知らせ（時間で消さない）
 let madeTask = null; // 作ったばかりのタスク { task, taskMd }。そのカードが出たら @task.md のコピーを目立たせる
 let mermaidFrames = []; // 右のペインの Mermaid の枠 { frame, block, code, loaded }
+// タブ：{ sessions: { list, active }, tasks: { [タスク]: { list, active } }, lastTask }。
+// list の要素は { id, key（見分け）, st（# の値）, label（題）, scroll, used（最後に使った時刻） }
+let tabs = loadTabs();
+// 次の描画でのタブの扱い。"" は今のタブで開く、"new" は新しいタブ、"history" は戻る・進む・読み込み直し、
+// 数はそのタブにする
+let tabIntent = "";
+let shownTab = null; // 右のペインに出しているタブの id（ほかのタブへ移ったかを見る）
+let tabScroll = null; // 移った先のタブで、断片を読み込んだ後に戻すスクロールの位置
 
 // 状態と URL の #
 
@@ -217,6 +232,7 @@ function go(changes, push) {
     changes = Object.assign({ cq: "q" in changes ? changes.q : state.q }, changes);
   }
   const next = normalize(Object.assign({}, state, changes));
+  if (next.v !== state.v) rememberTabPosition(); // ほかの表示へ移る前に、今のタブで見ていた所を覚える
   const url = toHash(next);
   if (url !== toHash(state)) {
     if (push) {
@@ -270,8 +286,10 @@ function changesState(changes) {
 function fromHistory() {
   const next = readHash();
   if (toHash(next) === toHash(state)) return;
+  rememberTabPosition();
   state = next;
   ui.q.value = state.q;
+  tabIntent = "history"; // # が指す物を出しているタブにする
   render();
 }
 
@@ -280,6 +298,9 @@ function fromHistory() {
 async function render() {
   const count = ++renderCount;
   const st = state;
+  const intent = tabIntent;
+  tabIntent = "";
+  syncTabs(st, intent);
   syncChrome(st);
   await load("list", listUrl(st));
   if (count !== renderCount) return;
@@ -453,6 +474,12 @@ const afterSwap = {
     if (!refreshed) ui.detail.scrollTop = 0; // 取り直したとき（タスクに書いたあと）は、見ていた所に留まる
     setupDetail();
     showMadeTask();
+    if (refreshed) return;
+    labelActiveTab();
+    // ほかのタブから移ってきたら、そのタブで見ていた所へ戻す（会話は setupDetail が t のターンへ送った）
+    const scroll = tabScroll;
+    tabScroll = null;
+    if (scroll !== null && !ui.detail.querySelector(".conv")) ui.detail.scrollTop = scroll;
   },
 };
 
@@ -529,6 +556,257 @@ function moveSelection(step) {
   selectRow(rows[next], false);
 }
 
+// タブ
+
+function loadTabs() {
+  const empty = { sessions: { list: [], active: null }, tasks: {}, lastTask: "" };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(TABS_KEY) || "null");
+    if (!saved || typeof saved !== "object") return empty;
+    const tasks = {};
+    for (const [task, group] of Object.entries(saved.tasks && typeof saved.tasks === "object" ? saved.tasks : {})) {
+      if (isTaskName(task)) tasks[task] = readTabGroup(group);
+    }
+    const lastTask = typeof saved.lastTask === "string" && isTaskName(saved.lastTask) ? saved.lastTask : "";
+    return { sessions: readTabGroup(saved.sessions), tasks: tasks, lastTask: lastTask };
+  } catch (error) {
+    return empty;
+  }
+}
+
+// 写してあったタブの組を読む（形の違うタブは捨てる。# の値は描画の前に normalize を通る）
+function readTabGroup(raw) {
+  const list = [];
+  for (const item of raw && Array.isArray(raw.list) ? raw.list : []) {
+    if (!item || !Number.isInteger(item.id) || typeof item.key !== "string" || !item.st) continue;
+    const st = {};
+    for (const key of TAB_KEYS.concat(["p", "q"])) {
+      if (typeof item.st[key] === "string") st[key] = item.st[key];
+    }
+    list.push({ id: item.id, key: item.key, st: st, label: typeof item.label === "string" ? item.label : "",
+      scroll: Number.isFinite(item.scroll) ? item.scroll : 0, used: Number.isFinite(item.used) ? item.used : 0 });
+  }
+  const active = list.find((tab) => tab.id === raw.active) || list[0];
+  return { list: list, active: active ? active.id : null };
+}
+
+function saveTabs() {
+  try {
+    sessionStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+  } catch (error) {
+    // 写せなくても、この画面の間はタブが効く
+  }
+}
+
+// 今の表示のタブの組。タブはセッションの画面だけ（ほかの表示では帯を出さない）
+function tabGroup(st) {
+  if (st.v === "sessions") return tabs.sessions;
+  return null;
+}
+
+// タブの見分け：資料・セッション（状況カードと会話は同じタブの中の行き来）・場所の概要。どれでもなければ ""
+function tabKey(st) {
+  if (st.d) return "d:" + st.d;
+  if (st.s) return "s:" + st.s;
+  if (st.v === "sessions" && st.p && !st.q) return "p:" + st.p;
+  return "";
+}
+
+// タブが覚える # の値。場所の概要のタブは、場所（一覧の絞り込みを兼ねる）と、空の検索の語も覚える
+function tabState(st) {
+  const saved = {};
+  for (const key of TAB_KEYS) saved[key] = st[key];
+  if (tabKey(st).startsWith("p:")) Object.assign(saved, { p: st.p, q: "" });
+  return saved;
+}
+
+function activeTab(group) {
+  return group.list.find((tab) => tab.id === group.active) || null;
+}
+
+// その物を出しているタブ。いくつもあれば、最後に使ったタブ
+function latestTab(group, key) {
+  let found = null;
+  for (const tab of group.list) {
+    if (tab.key === key && (!found || tab.used > found.used)) found = tab;
+  }
+  return found;
+}
+
+// 組の右端にタブを足す。id はすべての組を通して重ねない
+function addTab(group) {
+  let id = 0;
+  for (const other of [tabs.sessions].concat(Object.values(tabs.tasks))) {
+    for (const tab of other.list) id = Math.max(id, tab.id);
+  }
+  const tab = { id: id + 1, key: "", st: {}, label: "", scroll: 0, used: 0 };
+  group.list.push(tab);
+  return tab;
+}
+
+// 描画のたびに、今の表示をタブに写して帯を描き直す。intent は tabIntent（"" は今のタブの中身を替え、"new" は
+// 同じ物を出すタブか新しいタブ、"history" は今のタブが出していればそのまま・ほかのタブが出していればそのタブ・
+// どれも出していなければ今のタブの中身を替え、数はそのタブにする）
+function syncTabs(st, intent) {
+  const group = tabGroup(st);
+  const key = tabKey(st);
+  tabScroll = null;
+  if (!group) shownTab = null;
+  if (group && key) {
+    const current = activeTab(group);
+    let tab = null;
+    if (typeof intent === "number") tab = group.list.find((item) => item.id === intent) || null;
+    else if (intent === "new") tab = latestTab(group, key) || addTab(group);
+    else if (intent === "history") tab = current && current.key === key ? current : latestTab(group, key);
+    if (!tab) tab = current || addTab(group);
+    if (tab.id !== shownTab && tab.key === key) {
+      // ほかのタブ（か、ほかの表示）から移ってきた：読み込んだ後に、そのタブで見ていた所へ戻す。
+      // 断片が同じ URL でも出し直す（戻す所を、次の入れ替えまで持ち越さない）
+      tabScroll = tab.scroll;
+      panes.detail.url = null;
+    }
+    if (tab.key !== key) tab.scroll = 0;
+    group.active = shownTab = tab.id;
+    tab.key = key;
+    tab.st = tabState(st);
+    tab.used = Date.now();
+    saveTabs();
+  }
+  drawTabs();
+}
+
+// タブの帯を描く。題は textContent で入れ、全体を title に入れる（長い題は CSS が「…」で切る）。
+// 最後のタブは閉じないので、タブが1つなら「×」を出さない。組がなければ帯を隠す
+function drawTabs() {
+  const group = tabGroup(state);
+  ui.tabs.textContent = "";
+  ui.tabs.hidden = !group || !group.list.length;
+  if (ui.tabs.hidden) return;
+  const closable = group.list.length > 1;
+  let selected = null;
+  for (const tab of group.list) {
+    const item = element("span", "tab-item", "");
+    item.setAttribute("role", "presentation");
+    const button = element("button", "tab", tab.label || TAB_FALLBACK[tab.key.split(":")[0]] || "…");
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", tab.id === group.active ? "true" : "false");
+    button.dataset.tab = String(tab.id);
+    button.title = button.textContent;
+    item.append(button);
+    if (closable) {
+      const close = element("button", "tab-x", "×");
+      close.type = "button";
+      close.dataset.tabClose = String(tab.id);
+      close.setAttribute("aria-label", "タブを閉じる");
+      close.title = "タブを閉じる";
+      item.append(close);
+    }
+    ui.tabs.append(item);
+    if (tab.id === group.active) selected = item;
+  }
+  if (selected) selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+// 右のペインの最初の見出し（.dh h4）の文字を、今のタブの題にする（「実行中」などの印は除く）。
+// 今のタブの物を出しているときだけ（入力欄など、# にない物を出しているときは変えない）
+function labelActiveTab() {
+  const group = tabGroup(state);
+  const tab = group ? activeTab(group) : null;
+  const head = ui.detail.querySelector(".dh h4");
+  if (!tab || !head || tab.key !== tabKey(state) || panes.detail.url !== detailUrl(state)) return;
+  const copy = head.cloneNode(true);
+  for (const badge of copy.querySelectorAll(".badge")) badge.remove();
+  const label = copy.textContent.replace(/\s+/g, " ").trim();
+  if (!label || label === tab.label) return;
+  tab.label = label;
+  saveTabs();
+  drawTabs();
+}
+
+// 今のタブで見ている所を覚える（ほかのタブや表示へ移る前に呼ぶ）。会話は画面の上の端に見えているターン、
+// ほかはスクロールの位置
+function rememberTabPosition() {
+  const group = tabGroup(state);
+  const tab = group ? activeTab(group) : null;
+  if (!tab || tab.key !== tabKey(state)) return;
+  tab.scroll = ui.detail.scrollTop;
+  if (state.c && ui.detail.querySelector(".conv")) tab.st.t = currentTurn() || tab.st.t;
+  saveTabs();
+}
+
+// タブを押したとき：そのタブの値で開く（履歴に積むので、「←」で前のタブに戻れる）。一覧と左の絞り込みは
+// 変えない（場所の概要のタブだけ、その場所で絞り込む）
+function activateTab(id) {
+  const group = tabGroup(state);
+  const tab = group ? group.list.find((item) => item.id === id) : null;
+  if (!tab || (tab.id === group.active && tab.key === tabKey(state))) return;
+  rememberTabPosition();
+  tabIntent = id;
+  go(Object.assign({ s: "", c: "", t: "", cq: "", d: "", i: "" }, tab.st), true);
+}
+
+// 「×」：タブを閉じる。今のタブなら、右隣（なければ左隣）のタブにする。セッションの画面の最後のタブは閉じない
+function closeTab(id) {
+  const group = tabGroup(state);
+  const index = group ? group.list.findIndex((tab) => tab.id === id) : -1;
+  if (index < 0 || (group === tabs.sessions && group.list.length < 2)) return;
+  group.list.splice(index, 1);
+  const next = group.list[index] || group.list[index - 1];
+  if (group.active === id && next) {
+    group.active = null;
+    activateTab(next.id);
+    return;
+  }
+  saveTabs();
+  drawTabs();
+}
+
+// ⌘クリック・中クリック：新しいタブで開く。同じ物を出すタブがあれば、そのタブにする（重ねて開かない）
+function openInNewTab(changes) {
+  const group = tabGroup(state);
+  const key = tabKey(normalize(Object.assign({}, state, changes)));
+  if (!group || !key) return;
+  const open = latestTab(group, key);
+  if (open) {
+    activateTab(open.id);
+    return;
+  }
+  rememberTabPosition();
+  tabIntent = "new";
+  go(changes, true);
+}
+
+// ⌘クリック・中クリックで新しいタブに開く物の、状態の変化。セッションの画面の、一覧の行と、右のペインの
+// セッション・資料の行（リンク・操作のボタン、状況カードとタスクのカードの外枠は除く）。ほかは null
+function newTabChanges(event) {
+  const target = event.target;
+  if (state.v !== "sessions" || event.defaultPrevented || !(target instanceof Element)) return null;
+  if (target.closest("#toast, #confirm, a[href], [data-action]")) return null;
+  const picked = target.closest("[data-session], [data-doc]");
+  if (!picked || picked.classList.contains("card") || picked.classList.contains("task-card")) return null;
+  if (ui.list.contains(picked)) return rowChanges(picked);
+  if (ui.detail.contains(picked)) return detailChanges(picked);
+  return null;
+}
+
+// タブの帯：タブを押すとそのタブに、「×」で閉じる
+function onTabClick(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  const close = target && target.closest("[data-tab-close]");
+  const tab = target && target.closest("[data-tab]");
+  if (close) closeTab(Number(close.dataset.tabClose));
+  else if (tab) activateTab(Number(tab.dataset.tab));
+}
+
+// 中クリック（click ではなく auxclick が来る）も、⌘クリックと同じく新しいタブで開く
+function onAuxClick(event) {
+  const changes = event.button === 1 ? newTabChanges(event) : null;
+  if (!changes) return;
+  event.preventDefault();
+  openInNewTab(changes);
+}
+
 // 操作（data-action）
 
 const ACTIONS = {
@@ -577,6 +855,12 @@ function cardSession(button) {
 }
 
 function onClick(event) {
+  const tabChanges = event.button === 0 && event.metaKey ? newTabChanges(event) : null;
+  if (tabChanges) {
+    event.preventDefault();
+    openInNewTab(tabChanges);
+    return;
+  }
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
   const target = event.target;
   if (!(target instanceof Element) || target.closest("#toast, #confirm, a[href]")) return;
@@ -607,13 +891,19 @@ function onClick(event) {
 
 // 右のペインの中のつながり・時系列・子・資料の行から移る（戻る操作で戻れる）
 function openFromDetail(picked) {
+  const changes = detailChanges(picked);
+  if (changes) go(changes, true);
+}
+
+// 右のペインの中のセッション・資料の行を開くときの状態の変化
+function detailChanges(picked) {
   if (picked.dataset.session) {
     const changes = { s: picked.dataset.session, d: "", c: "", t: "", i: "" };
     if (state.v !== "sessions") Object.assign(changes, { v: "sessions", p: "", q: "" });
-    go(changes, true);
-  } else if (picked.dataset.doc) {
-    go({ d: picked.dataset.doc, c: "" }, true);
+    return changes;
   }
+  if (picked.dataset.doc) return { d: picked.dataset.doc, c: "" };
+  return null;
 }
 
 // タスクのカードを開く（戻る操作で戻れる）。どの状況のタスクも一覧に出るよう、状況の絞り込みは「すべて」にする
@@ -674,6 +964,12 @@ function switchView(view) {
   // タスクの表示との行き来では、場所の絞り込みと検索の語を持ち越さない（タスクの場所と「場所なし」は
   // タスクの表示だけのもの。タスクの表示には検索がない）
   if (view === "tasks" || state.v === "tasks") Object.assign(changes, { p: "", q: "" });
+  // セッションの表示に戻るときは、離れたときのタブを出す（一覧の最初の行を選び直すと、今のタブの中身が替わる）
+  const tab = view === "sessions" ? activeTab(tabs.sessions) : null;
+  if (tab) {
+    Object.assign(changes, tab.st);
+    tabIntent = tab.id;
+  }
   go(changes, true);
 }
 
@@ -1835,6 +2131,9 @@ function localTime(iso) {
 const narrowWindow = window.matchMedia("(max-width: 1199.98px)");
 
 document.addEventListener("click", onClick);
+document.addEventListener("auxclick", onAuxClick);
+ui.tabs.addEventListener("click", onTabClick);
+window.addEventListener("pagehide", rememberTabPosition); // 読み込み直したとき、今のタブで見ていた所に戻す
 document.addEventListener("submit", onSubmit);
 document.addEventListener("keydown", onKey);
 window.addEventListener("popstate", fromPopState);
@@ -1884,6 +2183,7 @@ ui.q.value = state.q;
 if (history.state && Number.isInteger(history.state.n)) position = furthest = history.state.n;
 else history.replaceState({ n: 0 }, "");
 syncHistoryButtons();
+tabIntent = "history"; // 読み込み直したら、# が指す物を出しているタブにする
 render();
 pollStatus();
 setInterval(pollStatus, POLL_MS);

@@ -115,7 +115,7 @@ class UiAssetsTest(unittest.TestCase):
     def test_shell_has_panes_and_meta(self):
         html = pkgutil.get_data("tsuzuki", "ui/index.html").decode()
         for part in ('id="pane-left"', 'id="pane-list"', 'id="pane-detail"', 'id="q"', 'name="tsuzuki-csrf"',
-                     'src="/static/app.js"', 'id="place-select"'):
+                     'src="/static/app.js"', 'id="place-select"', 'id="pane-right"', 'id="tabs"'):
             self.assertIn(part, html)
         self.assertNotIn("<script>", html)          # インラインのスクリプトを書かない
         self.assertNotIn('style="', html)
@@ -149,7 +149,7 @@ class UiAssetsTest(unittest.TestCase):
                      '<input id="q" placeholder="セッションと資料を検索（/ で移動）"', '<span id="status">',
                      '<button id="reindex">更新</button>', '<select id="place-select"', 'id="pane-left"',
                      'id="pane-list"', 'id="pane-detail"', 'id="toast"', 'id="confirm"', 'id="banner"',
-                     '<link rel="stylesheet" href="/static/app.css">',
+                     'id="pane-right"', 'id="tabs"', '<link rel="stylesheet" href="/static/app.css">',
                      '<script src="/static/app.js" defer></script>'):
             self.assertIn(part, html)
 
@@ -740,6 +740,46 @@ class SmallFixesAssetsTest(unittest.TestCase):
         self.assertIn("markWideCode()", _function(js, "readMore"))
         self.assertIn("ResizeObserver", js)  # 「中央を畳む」や窓の幅で、右のペインの幅が変わったとき
         self.assertIn("padding-bottom: calc(.5rem + 12px)", _rule(css, ".md pre.hscroll"))
+
+
+class TabsAssetsTest(unittest.TestCase):
+    """右のペインのタブ。"""
+
+    def test_tabs_bar_sits_above_the_detail_pane(self):
+        html = _asset("index.html")
+        right = html[html.index('<div id="pane-right">'):html.index("</main>")]
+        self.assertLess(right.index('<nav id="tabs" role="tablist" aria-label="タブ" hidden>'),
+                        right.index('<section id="pane-detail"'))
+        css = _asset("app.css")
+        self.assertIn("var(--left-width) var(--list-width) minmax(0, 1fr)", _rule(css, "#panes"))
+        self.assertIn("flex-direction: column", _rule(css, "#pane-right"))
+
+    def test_tabs_are_kept_for_the_window(self):
+        js = _asset("app.js")
+        for name in ("loadTabs", "saveTabs"):
+            body = _function(js, name)
+            self.assertIn("sessionStorage", body)
+            self.assertIn("try {", body)
+        self.assertIn('"tsuzuki-tabs"', js)
+        self.assertIn("tabIntent = \"history\"", _function(js, "fromHistory"))
+        self.assertIn("syncTabs(", _function(js, "render"))
+
+    def test_tab_labels_are_text(self):
+        js = _asset("app.js")
+        draw = _function(js, "drawTabs")
+        self.assertIn("textContent", draw + _function(js, "labelActiveTab"))
+        self.assertNotIn("innerHTML", draw)
+        self.assertIn(".dh h4", _function(js, "labelActiveTab"))
+
+    def test_tabs_open_with_command_click_and_middle_click(self):
+        js = _asset("app.js")
+        self.assertIn('addEventListener("auxclick"', js)
+        self.assertIn("event.button === 1", js)
+        self.assertIn("openInNewTab(", _function(js, "onClick"))
+        self.assertIn('tabIntent = "new"', _function(js, "openInNewTab"))
+
+    def test_switching_views_comes_back_to_the_tabs(self):
+        self.assertIn("tabs.sessions", _function(_asset("app.js"), "switchView"))
 
 
 class MermaidAssetsTest(unittest.TestCase):

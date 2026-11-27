@@ -207,10 +207,56 @@ body.searching #q { border-color: var(--accent); }
   grid-template-columns: var(--left-width) var(--list-width) minmax(0, 1fr);
 }
 #pane-left, #pane-list, #pane-detail { min-height: 0; overflow-y: auto; overflow-wrap: anywhere; }
-#pane-list, #pane-detail { border-left: 1px solid var(--border); }
-#pane-detail { padding: .85rem 1.1rem 2rem; }
+#pane-list { border-left: 1px solid var(--border); }
+/* 右の列：上にタブの帯、その下に詳細。動くのは詳細だけで、帯は動かない */
+#pane-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
+#pane-detail { flex: 1; padding: .85rem 1.1rem 2rem; }
 body.reading #pane-list { display: none; }
 body.reading #panes { grid-template-columns: var(--left-width) minmax(0, 1fr); }
+
+/* タブの帯。タブは題を1行で「…」で切る。入りきらなければ、帯の中で横に動かす */
+#tabs {
+  flex: none;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: thin; /* バーを常に出す設定でも、帯を高くしすぎない */
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.tab-item { display: flex; flex: 0 1 auto; min-width: 6rem; max-width: 16rem; border-right: 1px solid var(--border); }
+.tab {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: .32rem .75rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.tab-x {
+  flex: none;
+  padding: 0 .5rem 0 .15rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tab:hover, .tab-x:hover { color: var(--text-primary); }
+.tab[aria-selected="true"], .tab[aria-selected="true"] + .tab-x {
+  background: var(--selected-bg);
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+.tab[aria-selected="true"] { font-weight: 600; }
 
 /* 左：場所・資料の種類と、一覧の表示の設定 */
 
