@@ -14,7 +14,8 @@ from tsuzuki import taskwrite
 from tsuzuki.taskwrite import (ALREADY_IN_TASK, BAD_SECTION_LINE, CANNOT_COPY, NOT_A_COPY_TARGET, NOT_A_FILE, CANNOT_TRASH, CHANGED, NO_TRASH, NOT_A_TASK_FOLDER, TaskWriteError, create_task,
                               find_trash, normalize_short_name, normalize_ticket, render_task_md, section_text,
                               set_fields, set_waiting, trash_task, BAD_WORKSPACE, normalize_workspace,
-                              replace_heading, update_settings, copy_into_task, place_tasks_readme)
+                              replace_heading, update_settings, copy_into_task, place_tasks_readme,
+                              rename_task, renamed_folder_name, short_name_of)
 from tests.fixtures import allow_system_tmp, run_cli
 
 TEMPLATE = (
@@ -631,6 +632,77 @@ class CopyTest(_TmpCase):
     def test_copy_refuses_the_claude_dir(self):
         with self.assertRaises(TaskWriteError):
             self.copy(claude_dir=self.base)  # 置き場所が Claude Code の設定ディレクトリの中
+
+
+class RenameTest(_TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.root.mkdir()
+
+    def make_task(self, name):
+        d = self.root / name
+        d.mkdir()
+        (d / "task.md").write_bytes(TEMPLATE.encode("utf-8"))
+        return str(d)
+
+    def settings(self, md, **kw):
+        values = dict(title="ログインの期限", ticket="#123", repo="/Users/me/dev/web-app", workspace="",
+                      home=str(self.base))
+        values.update(kw)
+        return update_settings(md, self.root, **values)
+
+    def test_renamed_folder_name_keeps_the_date(self):
+        self.assertEqual(short_name_of("2026-11-19-serch-page"), "serch-page")
+        self.assertEqual(short_name_of("notes"), "notes")
+        self.assertEqual(renamed_folder_name("2026-11-19-serch-page", "search page"), "2026-11-19-search-page")
+        self.assertEqual(renamed_folder_name("notes", "memo"), "memo")
+        with self.assertRaises(TaskWriteError):
+            renamed_folder_name("2026-11-19-a", "../x")
+
+    def test_rename_task_moves_only_inside_the_root(self):
+        old = self.make_task("2026-11-19-serch")
+        new = rename_task(old, self.root, "2026-11-19-search")
+        self.assertEqual(new, os.path.join(os.path.realpath(str(self.root)), "2026-11-19-search"))
+        self.assertTrue(os.path.isfile(os.path.join(new, "task.md")))
+        self.assertFalse(os.path.exists(old))
+        self.make_task("2026-11-20-b")
+        with self.assertRaises(TaskWriteError) as caught:
+            rename_task(new, self.root, "2026-11-20-b")
+        self.assertIn("もうあります", str(caught.exception))
+        for bad in ("shared", ".x", "a/b"):
+            with self.assertRaises(TaskWriteError):
+                rename_task(new, self.root, bad)
+
+    def test_rename_task_refuses_a_folder_outside_the_root(self):
+        outside = self.base / "2026-11-19-x"
+        outside.mkdir()
+        with self.assertRaises(TaskWriteError):
+            rename_task(str(outside), self.root, "2026-11-19-y")
+        self.assertTrue(outside.is_dir())
+
+    def test_rename_task_reports_an_os_error(self):
+        old = self.make_task("2026-11-19-serch")
+        with mock.patch("os.rename", side_effect=OSError(errno.EACCES, "Permission denied")):
+            with self.assertRaises(TaskWriteError) as caught:
+                rename_task(old, self.root, "2026-11-19-search")
+        self.assertIn("名前を変えられませんでした", str(caught.exception))
+
+    def test_case_only_rename(self):
+        old = self.make_task("2026-11-19-Search")
+        rename_task(old, self.root, "2026-11-19-search")
+        self.assertIn("2026-11-19-search", os.listdir(str(self.root)))
+        self.assertNotIn("2026-11-19-Search", os.listdir(str(self.root)))
+
+    def test_update_settings_records_the_former_name(self):
+        md = Path(self.make_task("2026-11-19-search")) / "task.md"
+        self.assertTrue(self.settings(md, former="2026-11-19-serch"))  # ほかに変わる所はなくても書く
+        before = md.stat().st_mtime_ns
+        self.assertFalse(self.settings(md, former="2026-11-19-serch"))  # もうあれば書かない
+        self.assertEqual(md.stat().st_mtime_ns, before)
+        self.assertEqual(parse_task_md(md.read_text(encoding="utf-8")).former_names, ["2026-11-19-serch"])
+        self.assertTrue(self.settings(md, former="2026-11-19-sarch"))  # 新しい名前は後ろに足す
+        self.assertEqual(parse_task_md(md.read_text(encoding="utf-8")).former_names,
+                         ["2026-11-19-serch", "2026-11-19-sarch"])
 
 
 class TrashTest(_TmpCase):

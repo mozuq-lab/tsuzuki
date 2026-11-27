@@ -4,7 +4,8 @@
 画面から変えるのは title / ticket / repo / workspace の行と、題が変わったときの本文の見出しだけ。
 あとは、頼まれたときにタスクのフォルダーをゴミ箱へ動かす（消さずに、動かすだけ）ことと、ほかの場所の資料を
 タスクのフォルダーの直下へコピーする（元は変えず、今あるファイルも上書きしない）こと、置き場所の直下に
-README.md がなければ雛形から置くこと（今あるファイルは上書きしない）。
+README.md がなければ雛形から置くこと（今あるファイルは上書きしない）、頼まれたときに、置き場所の中でタスクの
+フォルダーの名前を変えること（同じ置き場所の中の os.rename だけで、ほかのフォルダーは上書きしない）。
 """
 import os
 import re
@@ -17,7 +18,8 @@ from typing import Callable, Dict, List, Optional
 
 from tsuzuki.pathguard import is_inside
 from tsuzuki.privacy import os_error_text
-from tsuzuki.tasks import _FENCE, _H1, _H2, STAGES, TASK_MD, is_task_dir_name, parse_task_md, task_title, ticket_chunks
+from tsuzuki.tasks import (_FENCE, _H1, _H2, STAGES, TASK_MD, created_from_name, format_former_names, is_task_dir_name,
+                           parse_former_names, parse_task_md, task_title, ticket_chunks)
 from tsuzuki.workspace import WorkspaceError, first_folder
 
 CHANGED = "task.md が変わりました。読み直してください"
@@ -26,6 +28,8 @@ CANNOT_TRASH = "ゴミ箱に入れられませんでした（%s）。Finder で�
 NOT_A_TASK_FOLDER = "ゴミ箱に入れられるのはタスクのフォルダーだけです: %s"
 NOT_A_COPY_TARGET = "コピー先はタスクのフォルダーだけです: %s"
 NOT_A_FILE = "資料が見つかりません: %s"
+NAME_TAKEN = "その名前のフォルダーがもうあります: %s"
+CANNOT_RENAME = "名前を変えられませんでした（%s）"
 ALREADY_IN_TASK = "この資料はもうタスクのフォルダーの中にあります"
 CANNOT_COPY = "コピーできませんでした: %s"
 MAX_COPY_NAMES = 999  # name-999 まで試して、なお空かなければ諦める
@@ -35,8 +39,8 @@ WAITING_SECTION = "待っていること"
 NOTHING = "なし"
 _BOM = "﻿"
 _SECTION_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
-_ALLOWED_KEYS = ("stage", "waiting", "title", "ticket", "repo", "workspace")
-_TEXT_KEYS = ("title", "ticket", "repo", "workspace")  # 1行の文字の値：改行と制御文字は断る
+_ALLOWED_KEYS = ("stage", "waiting", "title", "ticket", "repo", "workspace", "former_names")
+_TEXT_KEYS = ("title", "ticket", "repo", "workspace", "former_names")  # 1行の文字の値：改行と制御文字は断る
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")  # splitlines が行の切れ目にする U+0085・U+2028・U+2029 を含む
 
 
@@ -190,6 +194,36 @@ def _check_task_folder(task_dir: str, tasks_root: Path, message: str) -> str:
     return real
 
 
+def short_name_of(name: str) -> str:
+    """フォルダー名の短い名前。YYYY-MM-DD- で始まればその後ろ、そうでなければ名前のまま。"""
+    date = created_from_name(name)
+    return name[len(date) + 1:] if date and name[len(date):len(date) + 1] == "-" and len(name) > len(date) + 1 else name
+
+
+def renamed_folder_name(name: str, short_name: str) -> str:
+    """name の日付を残して、短い名前だけを short_name に替えたフォルダー名。日付がなければ短い名前だけ。"""
+    short = normalize_short_name(short_name)
+    date = created_from_name(name)
+    return "%s-%s" % (date, short) if date else short
+
+
+def rename_task(task_dir: str, tasks_root: Path, new_name: str, *, claude_dir: Optional[Path] = None) -> str:
+    """タスクのフォルダーを、置き場所の直下の new_name に名前を変え、新しいパスを返す。同じ置き場所の中の
+    os.rename だけで、ほかのフォルダーは上書きしない（大文字小文字だけの違いは、同じフォルダーなので許す）。"""
+    real = _check_task_folder(task_dir, tasks_root, NOT_A_TASK_FOLDER)
+    _refuse_claude_dir(tasks_root, claude_dir)
+    if "/" in new_name or not is_task_dir_name(new_name):
+        raise TaskWriteError("フォルダーの名前に使えない文字があります: %s" % new_name)
+    target = os.path.join(os.path.dirname(real), new_name)
+    if os.path.lexists(target) and not os.path.samefile(real, target):
+        raise TaskWriteError(NAME_TAKEN % new_name)
+    try:
+        os.rename(real, target)
+    except OSError as e:
+        raise TaskWriteError(CANNOT_RENAME % (e.strerror or e))
+    return target
+
+
 def copy_into_task(task_dir: str, tasks_root: Path, source: str, *, claude_dir: Optional[Path] = None) -> str:
     """source（普通のファイル）をタスクのフォルダーの直下へコピーし、コピーした先のパスを返す。元は動かさず、
     変えない。同じ名前があれば name-2.ext・name-3.ext…にして、今あるファイルは上書きしない（宛先の
@@ -324,13 +358,16 @@ def normalize_workspace(value: str, *, home: str) -> Optional[str]:
 
 def update_settings(task_md: Path, tasks_root: Path, *, title: str, ticket: str, repo: str, workspace: str, home: str,
                     expect_mtime: Optional[float] = None, expect_size: Optional[int] = None,
-                    claude_dir: Optional[Path] = None) -> bool:
+                    claude_dir: Optional[Path] = None, former: Optional[str] = None) -> bool:
     """題・チケット・リポジトリ・ワークスペースのうち、今と違う項目の行だけを書く。題が変われば、本文の
     見出し（今の題と同じときだけ）も同じ置き換えで変える。書いたら True、変わった所がなければ書かずに False。
-    値のそろえと確かめは、書く前にすべて済ませる。"""
-    for value in (title, ticket, repo, workspace):
+    値のそろえと確かめは、書く前にすべて済ませる。former があれば、task.md の former_names に（なければ後ろへ）
+    足し、ほかに変わる所がなくても書く（もうあれば足さない）。"""
+    for value in (title, ticket, repo, workspace, former or ""):
         if _CONTROL.search(value):
             raise TaskWriteError("改行や制御文字は使えません")
+    if former and parse_former_names(former) != [former]:
+        raise TaskWriteError("前のフォルダー名に使えない文字があります: %s" % former)
     new_title = _one_line(title)
     if not new_title:
         raise TaskWriteError("題を入れてください")
@@ -355,6 +392,10 @@ def update_settings(task_md: Path, tasks_root: Path, *, title: str, ticket: str,
             new_workspace = normalize_workspace(workspace, home=home)
             if new_workspace != current:
                 changes["workspace"] = new_workspace or ""
+        if former:
+            names = list(tf.former_names)
+            if former not in names:
+                changes["former_names"] = format_former_names(names + [former])
         if not changes:
             raise _Unchanged()
         out = _rewrite(text, changes)
