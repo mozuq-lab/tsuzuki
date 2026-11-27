@@ -697,13 +697,15 @@ function syncTabs(st, intent) {
     } else if (intent === "new") tab = latestTab(group, key) || addTab(group);
     else if (intent === "history") tab = current && current.key === key ? current : latestTab(group, key);
     if (!tab) tab = current || addTab(group);
+    // 別の物を出すときと、同じセッションでも会話とカードを替えるときは、前に見ていた所へは戻さない
+    // （会話の下の方の位置を、カードに当てない）
+    if (tab.key !== key || (tab.st.c || "") !== (st.c || "")) tab.scroll = 0;
     if (tab.id !== shownTab && tab.key === key) {
       // ほかのタブ（か、ほかの表示）から移ってきた：読み込んだ後に、そのタブで見ていた所へ戻す。
       // 断片が同じ URL でも出し直す（戻す所を、次の入れ替えまで持ち越さない）
       tabScroll = tab.scroll;
       panes.detail.url = null;
     }
-    if (tab.key !== key) tab.scroll = 0;
     group.active = shownTab = tab.id;
     tab.key = key;
     tab.st = tabState(st);

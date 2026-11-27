@@ -792,6 +792,14 @@ class TabsAssetsTest(unittest.TestCase):
         self.assertIn('"card"', _function(js, "tabKey"))
         self.assertIn("state.task", _function(js, "openCard"))  # タスクの画面では、そのタスクのタブで開く
 
+    def test_card_does_not_take_the_conversation_scroll(self):
+        # 同じセッションのタブで、会話とカードを替えたら、前の面のスクロールの位置を戻さない
+        # （会話の下の方の位置で、カードが下まで送られて開き、上の再開のボタンが見えなくなる）
+        sync = _function(_asset("app.js"), "syncTabs")
+        reset = '(tab.st.c || "") !== (st.c || "")) tab.scroll = 0;'
+        self.assertIn(reset, sync)
+        self.assertLess(sync.index(reset), sync.index("tabScroll = tab.scroll"))
+
     def test_task_tabs_follow_trash_and_rename(self):
         js = _asset("app.js")
         self.assertIn("forgetTaskTabs(", _function(js, "trashTask"))
