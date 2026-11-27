@@ -503,8 +503,9 @@ class TaskViewAssetsTest(unittest.TestCase):
                       _function(js, "leftUrl"))
         detail = _function(js, "detailUrl")
         self.assertIn('"/frag/task/" + encodeURIComponent(st.task)', detail)
-        # カードの中の資料の題（data-doc）は、タスクの表示のまま資料を開く
-        self.assertLess(detail.index("if (st.d)"), detail.index('if (st.v === "tasks")'))
+        # カードの中の資料の題（data-doc）と会話の行は、タスクの表示のまま、そのタスクのタブで開く
+        self.assertLess(detail.index("if (st.d)"), detail.index('if (st.v === "tasks" && !st.s)'))
+        self.assertLess(detail.index('if (st.v === "tasks" && !st.s)'), detail.index('"/frag/conversation/" + st.s'))
         # 一覧の行の data-task も、↑↓・押す・最初の行の自動の選択の対象にする
         self.assertIn(".row[data-task]", _function(js, "selectableRows"))
         self.assertIn("isTaskName(row.dataset.task", _function(js, "isSelectable"))
@@ -780,6 +781,44 @@ class TabsAssetsTest(unittest.TestCase):
 
     def test_switching_views_comes_back_to_the_tabs(self):
         self.assertIn("tabs.sessions", _function(_asset("app.js"), "switchView"))
+
+    def test_task_view_keeps_sessions_and_docs_in_the_hash(self):
+        js = _asset("app.js")
+        norm = _function(js, "normalize")
+        self.assertNotIn('if (st.v === "tasks") {\n    // タスクの表示ではセッションを選ばず', norm)
+        self.assertIn("if (!st.task)", norm)
+        url = _function(js, "detailUrl")
+        self.assertIn('"/frag/card/" + st.s', url)
+        self.assertIn('"card"', _function(js, "tabKey"))
+        self.assertIn("state.task", _function(js, "openCard"))  # タスクの画面では、そのタスクのタブで開く
+
+    def test_task_tabs_follow_trash_and_rename(self):
+        js = _asset("app.js")
+        self.assertIn("forgetTaskTabs(", _function(js, "trashTask"))
+        self.assertIn("renameTaskTabs(", _function(js, "saveSettings"))
+        self.assertIn('"d:"', _function(js, "renameTaskTabs"))
+        self.assertIn("hidden = true", _function(js, "openNewTask"))  # 新しいタスクの入力欄ではタブを出さない
+
+    def test_task_tabs_are_kept_per_task(self):
+        js = _asset("app.js")
+        # タスクの名前は "__proto__" や "constructor" でもよい。組の表はプロトタイプを持たず、自分の鍵だけを見る
+        self.assertIn("Object.create(null)", _function(js, "loadTabs"))
+        self.assertIn("Object.prototype.hasOwnProperty.call(tabs.tasks, ", _function(js, "taskTabs"))
+        self.assertIn("taskTabs(st.task)", _function(js, "tabGroup"))
+        # 組を作るのは描画の syncTabs だけ（移る前の状態で、ゴミ箱に入れた・名前を変えたタスクの組を作り直さない）
+        self.assertNotIn("addTab(", _function(js, "tabGroup"))
+        self.assertIn("ensureTaskTabs(st.task)", _function(js, "syncTabs"))
+        self.assertIn("tabs.lastTask = task", _function(js, "ensureTaskTabs"))
+        self.assertIn('card.key = "card"', _function(js, "ensureTaskTabs"))
+        # 左端のカードのタブは閉じられない
+        self.assertIn('"card"', _function(js, "drawTabs"))
+        self.assertIn('"card"', _function(js, "closeTab"))
+        # 一覧でタスクを押すと、そのタスクのカードのタブ（会話と資料を選び直す）
+        self.assertIn('{ task: row.dataset.task, d: "", s: "", c: "", t: "", cq: "" }', _function(js, "rowChanges"))
+        # 表示を切り替えて戻ったら、最後に見たタスクとそのタブ
+        self.assertIn("tabs.lastTask", _function(js, "switchView"))
+        # タスクやタブを移る前に、今のタブで見ていた所を覚える
+        self.assertIn("next.task !== state.task", _function(js, "go"))
 
 
 class MermaidAssetsTest(unittest.TestCase):

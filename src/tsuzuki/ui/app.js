@@ -37,7 +37,7 @@ const MERMAID_MAX_ERROR = 300; // 出す失敗の文の上限（字）
 // 写す（読み込み直しでは残り、窓を閉じると消える。読み書きは try の中で、使えなくてもこの画面の間は効く）
 const TABS_KEY = "tsuzuki-tabs";
 const TAB_KEYS = ["s", "c", "t", "cq", "d"];
-const TAB_FALLBACK = { s: "セッション", d: "資料", p: "場所" }; // 見出しを読み込む前の題（鍵の種類ごと）
+const TAB_FALLBACK = { s: "セッション", d: "資料", p: "場所", card: "タスク" }; // 見出しを読み込む前の題（鍵の種類ごと）
 
 // 表示の切り替え（自動 → ライト → ダーク → 自動）。自動のときは data-theme を付けず、localStorage のキーも持たない。
 // localStorage が使えなくても（読み書きは try の中）、自動のまま動く
@@ -159,7 +159,8 @@ let writeSlow = false; // 送っている書く操作の答えが WRITE_WAIT_MS 
 let toastWaits = false; // 知らせに出ているのが、答えを待っている知らせ（時間で消さない）
 let madeTask = null; // 作ったばかりのタスク { task, taskMd }。そのカードが出たら @task.md のコピーを目立たせる
 let mermaidFrames = []; // 右のペインの Mermaid の枠 { frame, block, code, loaded }
-// タブ：{ sessions: { list, active }, tasks: { [タスク]: { list, active } }, lastTask }。
+// タブ：{ sessions: { list, active }, tasks: { [タスク]: { list, active } }, lastTask }。tasks はタスクの
+// フォルダー名で引くので、プロトタイプを持たない表にする（"__proto__" などの名前のタスクも自分の組を持つ）。
 // list の要素は { id, key（見分け）, st（# の値）, label（題）, scroll, used（最後に使った時刻） }
 let tabs = loadTabs();
 // 次の描画でのタブの扱い。"" は今のタブで開く、"new" は新しいタブ、"history" は戻る・進む・読み込み直し、
@@ -191,9 +192,13 @@ function normalize(raw) {
   // タスクの表示には検索がない。検索の語があればセッションの表示で探す
   if (st.v === "tasks" && st.q) st.v = "sessions";
   if (st.v === "tasks") {
-    // タスクの表示ではセッションを選ばず、資料はカードから開いたときだけ（# を読み直しても同じ表示になる）
-    st.s = "";
-    if (!st.task) st.d = "";
+    // タスクの表示のセッションと資料は、選んだタスクのタブで開く物（# を読み直しても同じタブになる）。
+    // タスクを選んでいなければ、どちらも選ばない。資料を開いていれば、セッションは選ばない
+    if (!st.task) {
+      st.s = "";
+      st.d = "";
+    }
+    if (st.d) st.s = "";
   } else {
     st.task = "";
   }
@@ -232,7 +237,9 @@ function go(changes, push) {
     changes = Object.assign({ cq: "q" in changes ? changes.q : state.q }, changes);
   }
   const next = normalize(Object.assign({}, state, changes));
-  if (next.v !== state.v) rememberTabPosition(); // ほかの表示へ移る前に、今のタブで見ていた所を覚える
+  // ほかの表示・タスク・タブへ移る前に、今のタブで見ていた所を覚える（タスクの画面では、資料や会話を開くと
+  // ほかのタブへ移る。セッションの画面で今のタブの中身を替えるときは、syncTabs が覚えた位置を捨てる）
+  if (next.v !== state.v || next.task !== state.task || tabKey(next) !== tabKey(state)) rememberTabPosition();
   const url = toHash(next);
   if (url !== toHash(state)) {
     if (push) {
@@ -379,8 +386,8 @@ function leftUrl(st) {
   return "/frag/places" + query({ place: st.p });
 }
 
-// 右のペインの断片。null なら、一覧の最初の行を選ぶ。タスクのカードの資料の題（data-doc）を押したときは、
-// タスクの表示のまま資料を出す（戻る操作でカードに戻る）
+// 右のペインの断片。null なら、一覧の最初の行を選ぶ。タスクの表示では、選んだタスクのタブに出す物：
+// 資料（カードの資料の題 data-doc）、セッション（カードの会話の行。状況カードか会話）、どちらもなければカード
 function detailUrl(st) {
   if (st.d && st.v !== "tasks") {
     // 資料の一覧と検索の task.md の行（data-doc と data-task を持つ）は、資料ではなくタスクのカードを今の表示のまま出す
@@ -388,7 +395,7 @@ function detailUrl(st) {
     if (row && row.dataset.task && isTaskName(row.dataset.task)) return "/frag/task/" + encodeURIComponent(row.dataset.task);
   }
   if (st.d) return "/frag/doc/" + st.d + (st.v === "tasks" ? "" : query({ q: st.q })); // 検索の語は資料の中にも印を付ける
-  if (st.v === "tasks") return st.task ? "/frag/task/" + encodeURIComponent(st.task) : null;
+  if (st.v === "tasks" && !st.s) return st.task ? "/frag/task/" + encodeURIComponent(st.task) : null;
   if (st.v === "docs") return null;
   if (st.s && st.c) {
     return "/frag/conversation/" + st.s + query({ turn: st.t, q: st.cq });
@@ -474,8 +481,8 @@ const afterSwap = {
     if (!refreshed) ui.detail.scrollTop = 0; // 取り直したとき（タスクに書いたあと）は、見ていた所に留まる
     setupDetail();
     showMadeTask();
+    labelActiveTab(); // 取り直したとき（設定で題を変えたあとなど）も、題を合わせる
     if (refreshed) return;
-    labelActiveTab();
     // ほかのタブから移ってきたら、そのタブで見ていた所へ戻す（会話は setupDetail が t のターンへ送った）
     const scroll = tabScroll;
     tabScroll = null;
@@ -532,10 +539,10 @@ function markSelection(reveal) {
   revealedKey = key;
 }
 
-// 行を選んだときの状態の変化。選べない行なら null
+// 行を選んだときの状態の変化。選べない行なら null。タスクの行は、そのタスクのカードのタブを出す
 function rowChanges(row) {
   if (!isSelectable(row)) return null;
-  if (state.v === "tasks") return { task: row.dataset.task, d: "" };
+  if (state.v === "tasks") return { task: row.dataset.task, d: "", s: "", c: "", t: "", cq: "" };
   if (row.dataset.session) return { s: row.dataset.session, d: "", c: "", t: "", i: "" };
   return state.v === "docs" ? { d: row.dataset.doc } : { d: row.dataset.doc, s: "", c: "", t: "", i: "" };
 }
@@ -559,11 +566,11 @@ function moveSelection(step) {
 // タブ
 
 function loadTabs() {
-  const empty = { sessions: { list: [], active: null }, tasks: {}, lastTask: "" };
+  const empty = { sessions: { list: [], active: null }, tasks: Object.create(null), lastTask: "" };
   try {
     const saved = JSON.parse(sessionStorage.getItem(TABS_KEY) || "null");
     if (!saved || typeof saved !== "object") return empty;
-    const tasks = {};
+    const tasks = Object.create(null); // 写してあった名前が "__proto__" でも、表の形は変わらない
     for (const [task, group] of Object.entries(saved.tasks && typeof saved.tasks === "object" ? saved.tasks : {})) {
       if (isTaskName(task)) tasks[task] = readTabGroup(group);
     }
@@ -598,17 +605,41 @@ function saveTabs() {
   }
 }
 
-// 今の表示のタブの組。タブはセッションの画面だけ（ほかの表示では帯を出さない）
+// 今の表示のタブの組。セッションの画面は1つの組、タスクの画面は選んだタスクの組（syncTabs が作る）。
+// 資料の画面と、タスクを選んでいないときは null（帯を出さない）。ここでは組を作らない（移る前の状態で
+// 呼ばれても、ゴミ箱に入れた・名前を変えたタスクの組を作り直さない）
 function tabGroup(st) {
   if (st.v === "sessions") return tabs.sessions;
-  return null;
+  return st.v === "tasks" && st.task ? taskTabs(st.task) : null;
 }
 
-// タブの見分け：資料・セッション（状況カードと会話は同じタブの中の行き来）・場所の概要。どれでもなければ ""
+// そのタスクのタブの組（なければ null）。表の自分の鍵だけを見る
+function taskTabs(task) {
+  return Object.prototype.hasOwnProperty.call(tabs.tasks, task) ? tabs.tasks[task] : null;
+}
+
+// 出すタスクのタブの組。初めて開くタスクは、左端のカードのタブだけの組を作る（写してあった組の左端が
+// カードのタブでなくても作り直す）。表示を切り替えて戻ったときのため、最後に見たタスクとして覚える
+function ensureTaskTabs(task) {
+  tabs.lastTask = task;
+  let group = taskTabs(task);
+  if (!group || !group.list.length || group.list[0].key !== "card") {
+    group = { list: [], active: null };
+    tabs.tasks[task] = group;
+    const card = addTab(group);
+    card.key = "card";
+    group.active = card.id;
+  }
+  return group;
+}
+
+// タブの見分け：資料・セッション（状況カードと会話は同じタブの中の行き来）・場所の概要・タスクのカード。
+// どれでもなければ ""
 function tabKey(st) {
   if (st.d) return "d:" + st.d;
   if (st.s) return "s:" + st.s;
   if (st.v === "sessions" && st.p && !st.q) return "p:" + st.p;
+  if (st.v === "tasks" && st.task) return "card";
   return "";
 }
 
@@ -646,9 +677,11 @@ function addTab(group) {
 
 // 描画のたびに、今の表示をタブに写して帯を描き直す。intent は tabIntent（"" は今のタブの中身を替え、"new" は
 // 同じ物を出すタブか新しいタブ、"history" は今のタブが出していればそのまま・ほかのタブが出していればそのタブ・
-// どれも出していなければ今のタブの中身を替え、数はそのタブにする）
+// どれも出していなければ今のタブの中身を替え、数はそのタブにする）。タスクの組では、数でなければ（数でも、
+// そのタブが別の物を出していれば）、カードはカードのタブ、ほかは同じ物を出すタブか新しいタブにする
+// （今のタブの中身は替えない。カードのタブにほかの物を出さない）
 function syncTabs(st, intent) {
-  const group = tabGroup(st);
+  const group = st.v === "tasks" && st.task ? ensureTaskTabs(st.task) : tabGroup(st);
   const key = tabKey(st);
   tabScroll = null;
   if (!group) shownTab = null;
@@ -656,7 +689,12 @@ function syncTabs(st, intent) {
     const current = activeTab(group);
     let tab = null;
     if (typeof intent === "number") tab = group.list.find((item) => item.id === intent) || null;
-    else if (intent === "new") tab = latestTab(group, key) || addTab(group);
+    if (group !== tabs.sessions) {
+      if (!tab || tab.key !== key) {
+        tab = key === "card" ? group.list[0]
+          : current && current.key === key ? current : latestTab(group, key) || addTab(group);
+      }
+    } else if (intent === "new") tab = latestTab(group, key) || addTab(group);
     else if (intent === "history") tab = current && current.key === key ? current : latestTab(group, key);
     if (!tab) tab = current || addTab(group);
     if (tab.id !== shownTab && tab.key === key) {
@@ -676,13 +714,14 @@ function syncTabs(st, intent) {
 }
 
 // タブの帯を描く。題は textContent で入れ、全体を title に入れる（長い題は CSS が「…」で切る）。
-// 最後のタブは閉じないので、タブが1つなら「×」を出さない。組がなければ帯を隠す
+// 最後のタブとタスクのカードのタブは閉じないので、タブが1つのときとカードのタブには「×」を出さない。
+// 組がなければ帯を隠す
 function drawTabs() {
   const group = tabGroup(state);
   ui.tabs.textContent = "";
   ui.tabs.hidden = !group || !group.list.length;
   if (ui.tabs.hidden) return;
-  const closable = group.list.length > 1;
+  const many = group.list.length > 1;
   let selected = null;
   for (const tab of group.list) {
     const item = element("span", "tab-item", "");
@@ -694,7 +733,7 @@ function drawTabs() {
     button.dataset.tab = String(tab.id);
     button.title = button.textContent;
     item.append(button);
-    if (closable) {
+    if (many && tab.key !== "card") {
       const close = element("button", "tab-x", "×");
       close.type = "button";
       close.dataset.tabClose = String(tab.id);
@@ -740,17 +779,19 @@ function rememberTabPosition() {
 function activateTab(id) {
   const group = tabGroup(state);
   const tab = group ? group.list.find((item) => item.id === id) : null;
-  if (!tab || (tab.id === group.active && tab.key === tabKey(state))) return;
+  // 今のタブで、その物を出していれば何もしない（設定の入力欄などを出していれば、タブの物に戻す）
+  if (!tab || (tab.id === group.active && tab.key === tabKey(state) && panes.detail.url === detailUrl(state))) return;
   rememberTabPosition();
   tabIntent = id;
   go(Object.assign({ s: "", c: "", t: "", cq: "", d: "", i: "" }, tab.st), true);
 }
 
-// 「×」：タブを閉じる。今のタブなら、右隣（なければ左隣）のタブにする。セッションの画面の最後のタブは閉じない
+// 「×」：タブを閉じる。今のタブなら、右隣（なければ左隣）のタブにする。セッションの画面の最後のタブと、
+// タスクの画面のカードのタブは閉じない
 function closeTab(id) {
   const group = tabGroup(state);
   const index = group ? group.list.findIndex((tab) => tab.id === id) : -1;
-  if (index < 0 || (group === tabs.sessions && group.list.length < 2)) return;
+  if (index < 0 || group.list[index].key === "card" || (group === tabs.sessions && group.list.length < 2)) return;
   group.list.splice(index, 1);
   const next = group.list[index] || group.list[index - 1];
   if (group.active === id && next) {
@@ -760,6 +801,27 @@ function closeTab(id) {
   }
   saveTabs();
   drawTabs();
+}
+
+// ゴミ箱に入れたタスクのタブを忘れる
+function forgetTaskTabs(task) {
+  if (taskTabs(task)) delete tabs.tasks[task];
+  if (tabs.lastTask === task) tabs.lastTask = "";
+  saveTabs();
+}
+
+// 名前を変えたタスクのタブを、新しい名前に移す。資料のタブは閉じる（フォルダーのパスが変わり、資料の ID も
+// 変わるため）。今のタブを閉じたら、カードのタブにする
+function renameTaskTabs(old, next) {
+  const group = taskTabs(old);
+  if (group) {
+    delete tabs.tasks[old];
+    group.list = group.list.filter((tab) => !tab.key.startsWith("d:"));
+    if (!activeTab(group) && group.list.length) group.active = group.list[0].id;
+    tabs.tasks[next] = group;
+  }
+  if (tabs.lastTask === old) tabs.lastTask = next;
+  saveTabs();
 }
 
 // ⌘クリック・中クリック：新しいタブで開く。同じ物を出すタブがあれば、そのタブにする（重ねて開かない）
@@ -939,9 +1001,14 @@ async function linkToTask(button) {
   }
 }
 
-// セッションのカードを開く（会話の「状況カードに戻る」と、タスクのカードの会話の行）。タスクの表示からは、
-// セッションの表示へ移る（戻る操作で戻れる）
+// セッションのカードを開く（会話の「状況カードに戻る」と、タスクのカードの会話の行。戻る操作で戻れる）。
+// タスクの表示でタスクを選んでいれば、表示はそのままで、そのタスクのタブで開く（会話からなら同じタブの中で
+// 戻る）。ほかの表示からは、セッションの表示へ移る
 function openCard(sessionId) {
+  if (state.v === "tasks" && state.task) {
+    go({ s: sessionId, c: "", t: "", cq: "", d: "" }, true);
+    return;
+  }
   const changes = { s: sessionId, d: "", c: "", t: "" };
   if (state.v !== "sessions") Object.assign(changes, { v: "sessions", p: "", q: "", i: "" });
   go(changes, true);
@@ -949,13 +1016,13 @@ function openCard(sessionId) {
 
 function choosePlace(place) {
   if (state.v === "docs") go({ p: place, d: "" }, true);
-  else if (state.v === "tasks") go({ p: place, task: "", d: "" }, true);
+  else if (state.v === "tasks") go({ p: place, task: "", d: "", s: "", c: "", t: "", cq: "" }, true);
   else go({ p: place, s: "", d: "", c: "", t: "", i: "" }, true);
 }
 
 // タスクの状況（進行中と待ち・完了・すべて）を選ぶ。選び直した一覧の最初の行を選ぶ
 function chooseStatus(status) {
-  go({ status: status, task: "", d: "" }, true);
+  go({ status: status, task: "", d: "", s: "", c: "", t: "", cq: "" }, true);
 }
 
 function switchView(view) {
@@ -964,8 +1031,16 @@ function switchView(view) {
   // タスクの表示との行き来では、場所の絞り込みと検索の語を持ち越さない（タスクの場所と「場所なし」は
   // タスクの表示だけのもの。タスクの表示には検索がない）
   if (view === "tasks" || state.v === "tasks") Object.assign(changes, { p: "", q: "" });
-  // セッションの表示に戻るときは、離れたときのタブを出す（一覧の最初の行を選び直すと、今のタブの中身が替わる）
-  const tab = view === "sessions" ? activeTab(tabs.sessions) : null;
+  // 戻るときは、離れたときのタブを出す（一覧の最初の行を選び直すと、セッションの表示では今のタブの中身が
+  // 替わる）。タスクの表示では、最後に見たタスクと、そのタスクの今のタブ
+  let tab = null;
+  if (view === "sessions") {
+    tab = activeTab(tabs.sessions);
+  } else if (view === "tasks" && tabs.lastTask) {
+    changes.task = tabs.lastTask;
+    const group = taskTabs(tabs.lastTask);
+    tab = group ? activeTab(group) : null;
+  }
   if (tab) {
     Object.assign(changes, tab.st);
     tabIntent = tab.id;
@@ -1510,6 +1585,7 @@ async function saveSettings(form, confirm) {
   if (!answer.ok) return;
   panes.detail.url = null; // 入力欄から、同じ URL のカードへ戻す
   if (answer.task && answer.task !== form.dataset.task) {
+    renameTaskTabs(form.dataset.task, answer.task); // タブは新しい名前のタスクに残す（資料のタブは閉じる）
     panes.list.url = panes.left.url = null; // 同じ URL でも取り直す（一覧の行と左の数が新しい名前になる）
     go({ task: answer.task, d: "", s: "", c: "" }, false);
     return;
@@ -1723,14 +1799,17 @@ function trashTask(button) {
     if (!answer) return;
     toast(answer.message);
     if (!answer.ok) return;
+    forgetTaskTabs(task);
     panes.list.url = panes.left.url = null; // 同じ URL でも取り直す
     go({ v: "tasks", task: "", d: "", q: "", s: "", c: "", t: "", i: "" }, false); // 資料や検索の画面からでも一覧へ
   });
 }
 
-// 「＋ 新しいタスク」：右に入力欄を出す（# には残さない。一覧の行を選べばカードに戻る）
+// 「＋ 新しいタスク」：右に入力欄を出す（# には残さない。一覧の行を選べばカードに戻る）。入力欄を出している
+// 間はタブの帯を隠す（次の描画で drawTabs が戻す）
 async function openNewTask() {
   if (!(await load("detail", NEW_TASK_URL))) return;
+  ui.tabs.hidden = true;
   const title = ui.detail.querySelector('#new-task [name="title"]');
   if (title) title.focus();
 }
@@ -1783,8 +1862,8 @@ async function createTask(form) {
   // 一覧と左は同じ URL でも取り直す。作ったタスクは進行中なので、完了だけの絞り込みと場所の絞り込みは外す
   panes.list.url = null;
   panes.left.url = null;
-  go({ v: "tasks", task: answer.task, status: state.status === "done" ? "" : state.status, p: "", d: "", q: "" },
-    true);
+  go({ v: "tasks", task: answer.task, status: state.status === "done" ? "" : state.status, p: "", d: "", q: "", s: "",
+    c: "", t: "", cq: "" }, true);
 }
 
 // 作ったばかりのタスクのカードが出たら、「@task.md をコピー」（その task.md の @ を持つボタン）に印を付けて移る
