@@ -46,6 +46,15 @@ def resume_command(cwd: str, session_id: str) -> str:
     return "cd " + shlex.quote(cwd) + " && " + claude_resume(session_id)
 
 
+def resume_cwd(conn: sqlite3.Connection, cwd: str, *, isdir=os.path.isdir) -> str:
+    """再開するフォルダー。台帳の cwd は始めたときのままなので、そこがなく、名前を変えたタスクの前の
+    フォルダーの中なら、今のパスに読み替える（今のパスがあるときだけ）。それ以外は cwd のまま返す。"""
+    if not cwd or isdir(cwd):
+        return cwd
+    moved = current_path(cwd, former_folders(conn))
+    return moved if moved and isdir(moved) else cwd
+
+
 def _run(*args, **kwargs):
     """subprocess.run の呼び出しを実行時に引く（テストで差し替えられるように既定の runner にする）。"""
     return subprocess.run(*args, **kwargs)
@@ -158,15 +167,14 @@ def resume(conn: sqlite3.Connection, session_id: str, how: str, *, cfg: Config, 
     cwd = row[0] or ""
     if not row[1]:
         return ActionOutcome(False, False, "記録は削除済みのため再開できません")
-    if not cwd or not isdir(cwd):
-        # 台帳の cwd は始めたときのままなので、名前を変えたフォルダーなら今のパスに読み替える
-        moved = current_path(cwd, former_folders(conn)) if cwd else None
-        if not moved or not isdir(moved):
-            return ActionOutcome(False, False, "作業ディレクトリが見つかりません: %s" % cwd)
+    target = resume_cwd(conn, cwd, isdir=isdir)
+    if not target or not isdir(target):
+        return ActionOutcome(False, False, "作業ディレクトリが見つかりません: %s" % cwd)
+    if target != cwd:  # 名前を変えたフォルダーで始めた会話
         if how == "vscode":
             # パネルは窓のフォルダーの中しか探さず、なければ黙って新しい会話を始めてしまう
             return ActionOutcome(False, False, PANEL_MOVED)
-        cwd = moved
+        cwd = target
     if session_id in live and not confirm:
         return ActionOutcome(False, True, "このセッションは今開いています。続けますか？")
     if how == "vscode":

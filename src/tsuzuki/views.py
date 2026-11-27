@@ -12,11 +12,10 @@ from tsuzuki.ingest import choose_title
 from tsuzuki.places import short_labels
 from tsuzuki.relations import PRECEDENCE
 from tsuzuki.render import render_markdown, render_pre
-from tsuzuki.resume import is_session_id, resume_command
+from tsuzuki.resume import is_session_id, resume_command, resume_cwd
 from tsuzuki.retention import DAY_SECONDS, iso_utc
 from tsuzuki.sources.live import LiveSession
 from tsuzuki.sources.transcript import AssistantText, ToolUse, UserPrompt, extract_events, iter_lines, tool_summary
-from tsuzuki.taskrename import current_path, former_folders
 from tsuzuki.tasks import TASK_MD, within
 
 RELATION_LABELS = {
@@ -251,12 +250,8 @@ def session_detail(conn: sqlite3.Connection, session_id: str, *, live: Dict[str,
     docs, docs_total = _card_docs(conn, session_id, r["cwd"], home)
     command = None
     if r["transcript_exists"] and r["cwd"] and is_session_id(session_id):
-        cwd = r["cwd"]
-        if not os.path.isdir(cwd):  # 名前を変えたフォルダーで始めた会話は、今のパスで再開する
-            moved = current_path(cwd, former_folders(conn))
-            if moved and os.path.isdir(moved):
-                cwd = moved
-        command = resume_command(cwd, session_id)
+        # 名前を変えたフォルダーで始めた会話は、今のパスで再開する
+        command = resume_command(resume_cwd(conn, r["cwd"]), session_id)
     labels = _labels(conn)
     return SessionDetail(
         **_row_values(r, _prs(conn, [session_id]).get(session_id, []), live, labels),

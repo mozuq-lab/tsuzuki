@@ -14,7 +14,7 @@ from unittest import mock
 from tsuzuki import cli
 from tsuzuki.config import Config
 from tsuzuki.resume import (PANEL_MOVED, ActionOutcome, applescript_quote, is_session_id, open_document, open_folder, open_place, resume,
-                           resume_command, run_steps, terminal_steps, vscode_steps, conversation_prompt,
+                           resume_command, resume_cwd, run_steps, terminal_steps, vscode_steps, conversation_prompt,
                            new_conversation_command, vscode_new_steps, terminal_new_steps, start_conversation,
                            NO_WORKSPACE)
 from tsuzuki.sources.live import LiveSession
@@ -246,6 +246,28 @@ class ResumeTest(unittest.TestCase):
             code, _, err = self.cli_run("resume", SID, "--terminal")
         self.assertEqual(code, 1)
         self.assertIn("開けませんでした", err)
+
+    def test_resume_cli_in_a_renamed_folder(self):
+        # 名前を変えたフォルダーで始めた会話は、出すコマンドも Terminal で走らせるコマンドも今のパスで再開する
+        new, old = self._renamed()
+        self.conn.commit()
+        code, out, _ = self.cli_run("resume", SID[:8])
+        self.assertEqual(code, 0)
+        self.assertEqual(out, resume_command(new, SID) + "\n")
+        with mock.patch("tsuzuki.resume.subprocess.run", side_effect=lambda a, **k: self.calls.append(a) or Proc(0)):
+            code, out, _ = self.cli_run("resume", SID[:8], "--terminal")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, resume_command(new, SID) + "\nTerminal で開きました\n")
+        self.assertIn(resume_command(new, SID), self.calls[0][2])
+
+    def test_resume_cwd(self):
+        new, old = self._renamed()
+        self.assertEqual(resume_cwd(self.conn, old, isdir=lambda p: p == new), new)
+        self.assertEqual(resume_cwd(self.conn, old, isdir=lambda p: True), old)  # 前のパスがまたあれば、そのまま
+        self.assertEqual(resume_cwd(self.conn, old, isdir=lambda p: False), old)  # 今のパスもなければ、そのまま
+        other = os.path.join(self.d, "t", "other")
+        self.assertEqual(resume_cwd(self.conn, other, isdir=lambda p: p == new), other)
+        self.assertEqual(resume_cwd(self.conn, "", isdir=lambda p: True), "")
 
     def test_resume_cli_gone(self):
         self.conn.commit()

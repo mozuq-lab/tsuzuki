@@ -335,7 +335,7 @@ def cmd_forget(args: argparse.Namespace) -> int:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    from tsuzuki.resume import resume, resume_command
+    from tsuzuki.resume import resume, resume_command, resume_cwd
     from tsuzuki.sources.live import live_sessions
     from tsuzuki.store import LEDGER_FILENAME, open_ledger
     ident = args.id.strip()
@@ -355,7 +355,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         if not row[1]:
             print("記録は削除済みのため再開できません", file=sys.stderr)
             return 1
-        print(resume_command(row[0] or "", session_id))
+        # 名前を変えたフォルダーで始めた会話は、今のパスで再開する（Terminal で開くときと同じ）
+        print(resume_command(resume_cwd(conn, row[0] or ""), session_id))
         if not args.terminal:
             return 0
         cfg = load_config(ledger)
