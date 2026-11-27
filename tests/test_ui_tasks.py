@@ -763,8 +763,9 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         self.assertEqual((form["id"], form["data-task"], form["data-mtime"], form["data-size"]),
                          ("task-settings", EVIL_NAME, "1795243515.25", "321"))
         self.assertEqual([a["name"] for tag, a in m.tags if tag in ("input", "select")],
-                         ["title", "ticket", "repo", "workspace"])
+                         ["title", "short_name", "ticket", "repo", "workspace"])
         self.assertEqual(m.tags_with("name", "title")[0][1]["value"], EVIL)
+        self.assertEqual(m.tags_with("name", "short_name")[0][1]["value"], 'x" onclick="alert(1)')
         self.assertEqual(m.tags_with("name", "ticket")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["value"], EVIL)
         self.assertEqual(m.tags_with("name", "workspace")[0][1]["placeholder"], "~/dev/app.code-workspace（任意）")
@@ -776,7 +777,7 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
                       'VS Code のパネルでは最初のフォルダーで始まるので、こうするとどれでもワークスペースのあるフォルダーで始まります。'
                       'ワークスペースのファイルがリポジトリの中にあると、その変更が Git に出ます。'
                       'このワークスペースを VS Code で開いているときは、VS Code が窓を読み込み直し、パネルの会話が途切れることがあります。</div>', html)
-        self.assertEqual(html.count('class="note"'), 2)
+        self.assertEqual(html.count('class="note"'), 3)
         self.assertNotIn("VS Code で開くときの場所", html)
         options = [a for tag, a in m.tags if tag == "option"]
         self.assertEqual([a.get("value") for a in options], ["", EVIL, "/w/x"])
@@ -793,6 +794,24 @@ class UiTasksTest(SafeMarkup, unittest.TestCase):
         # repo がなければ「なし」が選ばれる
         none = Markup(frag_task_settings("a", TaskFile(title="t"), "t", repos=[], mtime=1.0, size=1))
         self.assertIn("selected", [a for tag, a in none.tags if tag == "option"][0])
+
+    def test_settings_form_short_name(self):
+        # 題の次に短い名前の欄。日付のあるフォルダー名では日付の後ろを入れ、注意にそのタスクの日付を出す
+        html = frag_task_settings("2026-11-19-serch-page", TaskFile(title="t"), "t", repos=[], mtime=1.0, size=1)
+        m = self.assertSafe(html)
+        self.assertEqual([a["name"] for tag, a in m.tags if tag in ("input", "select")][:2], ["title", "short_name"])
+        field = m.tags_with("name", "short_name")[0][1]
+        self.assertEqual((field["value"], field["maxlength"], field["spellcheck"]), ("serch-page", "80", "false"))
+        self.assertIn("required", field)
+        self.assertIn('<span class="k">短い名前</span>', html)
+        self.assertIn('<div class="note">フォルダー名は「2026-11-19-短い名前」になります。'
+                      '変えると、フォルダーの名前が変わります</div>', html)
+        # 日付のないフォルダー名・日付だけのフォルダー名では、名前をまるごと入れ、注意に日付を出さない
+        for name in ("notes", "2026-11-19"):
+            html = frag_task_settings(name, TaskFile(title="t"), "t", repos=[], mtime=1.0, size=1)
+            self.assertEqual(Markup(html).tags_with("name", "short_name")[0][1]["value"], name)
+            self.assertIn('<div class="note">フォルダー名は「短い名前」になります。'
+                          '変えると、フォルダーの名前が変わります</div>', html)
 
     def test_copy_to_task_button(self):
         missing = file_item("/Users/me/old/gone.md", missing=True, relation="名指し", doc_id=30)

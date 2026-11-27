@@ -537,9 +537,17 @@ class TaskViewAssetsTest(unittest.TestCase):
         self.assertIn('"form-cancel": (button) => cancelForm(button)', js)
         self.assertIn('"task-settings": (button) => openSettings(button)', js)
         self.assertIn('load("detail", "/frag/task-settings/" + encodeURIComponent(task))', _function(js, "openSettings"))
-        self.assertIn("saveSettings(form)", submit)
+        self.assertIn("saveSettings(form, false)", submit)
         save = _function(js, "saveSettings")
         for part in ('"/api/task-settings"', "mtime: Number(", "size: Number(", "workspace:", "reloadTasks()"):
+            self.assertIn(part, save)
+        # 短い名前も送る。このフォルダーで始めた会話があれば、確かめてから confirm 付きで送り直す。名前が変わったら、
+        # 新しい名前のタスクへ移る（一覧と左も取り直す）
+        for part in ('short_name: field("short_name")', "confirm: confirm === true",
+                     "answer.needs_confirm && confirm !== true",
+                     "askToContinue(answer.message, () => saveSettings(form, true))",
+                     "answer.task !== form.dataset.task", "panes.list.url = panes.left.url = null",
+                     'go({ task: answer.task, d: "", s: "", c: "" }, false)'):
             self.assertIn(part, save)
         cancel = _function(js, "cancelForm")
         self.assertIn('"task-settings"', cancel)

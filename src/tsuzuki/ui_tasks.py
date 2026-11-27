@@ -19,6 +19,7 @@ from tsuzuki.retention import iso_utc
 from tsuzuki.tasks import SHARED_DIR, STAGES, TaskFile, at_reference, no_waiting, stage_label, ticket_numbers
 from tsuzuki.taskviews import (DOC_BUNDLE_LIMIT, STATUS_LABELS, WORK_FILES_LIMIT, TaskDetail, TaskFileItem, TaskRow,
                               TaskSessionItem)
+from tsuzuki.taskwrite import short_name_of
 from tsuzuki.ui_render import (Attr, _attrs, _badges, _button, _e, _filter_row, _join, _mtime, _n, _period, _size,
                                 _tilde)
 
@@ -43,6 +44,11 @@ WORKSPACE_NOTE = (
     'ワークスペースのあるフォルダーで、VS Code のパネルでは最初のフォルダーで始まるので、こうするとどれでも'
     'ワークスペースのあるフォルダーで始まります。ワークスペースのファイルがリポジトリの中にあると、その変更が Git に出ます。'
     'このワークスペースを VS Code で開いているときは、VS Code が窓を読み込み直し、パネルの会話が途切れることがあります。')
+
+
+# 設定の短い名前の欄の注意書き（%s はタスクの日付。日付で始まらないフォルダー名では SHORT_NAME_NOTE_PLAIN）
+SHORT_NAME_NOTE = "フォルダー名は「%s-短い名前」になります。変えると、フォルダーの名前が変わります"
+SHORT_NAME_NOTE_PLAIN = "フォルダー名は「短い名前」になります。変えると、フォルダーの名前が変わります"
 
 
 # カードの「Claude で使う準備」の項目：このタスクの会話を始めるフォルダーに置く物（この順に出す）
@@ -491,9 +497,12 @@ def frag_new_task(repos: List[Tuple[str, str]]) -> str:
 
 def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple[str, str]], mtime: float,
                        size: int) -> str:
-    """タスクの設定の入力欄：題・チケット・リポジトリ（場所の一覧から。今の値が一覧になければ、先頭の近くに
-    選んだ状態で足す）・ワークスペース。tf は task.md の今の値、title は今の題。data-mtime・data-size は読んだときの
-    task.md の更新時刻（repr）と大きさで、送り返して、その後に書き換わっていないか確かめる。"""
+    """タスクの設定の入力欄：題・短い名前（フォルダー名が YYYY-MM-DD- で始まればその後ろ、そうでなければ名前の
+    まま）・チケット・リポジトリ（場所の一覧から。今の値が一覧になければ、先頭の近くに選んだ状態で足す）・
+    ワークスペース。tf は task.md の今の値、title は今の題。data-mtime・data-size は読んだときの task.md の
+    更新時刻（repr）と大きさで、送り返して、その後に書き換わっていないか確かめる。"""
+    short = short_name_of(name)
+    date = name[:-len(short) - 1] if short != name else ""  # short_name_of と同じく、YYYY-MM-DD- で始まるときだけ
     repo = tf.repo or ""
     paths = [path for path, _ in repos]
     options = ['<option value=""%s>なし</option>' % ("" if repo else " selected")]
@@ -506,6 +515,8 @@ def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple
         '<form%s autocomplete="off">'
         '<div class="dh"><div class="head"><h4>設定を変える</h4></div></div>'
         '<label class="kv"><span class="k">題</span><input%s></label>'
+        '<label class="kv"><span class="k">短い名前</span><input%s></label>'
+        '<div class="note">%s</div>'
         '<label class="kv"><span class="k">チケット</span><input%s></label>'
         '<div class="note">複数あるときは , で区切ります</div>'
         '<label class="kv"><span class="k">リポジトリ</span><select name="repo">%s</select></label>'
@@ -517,6 +528,9 @@ def frag_task_settings(name: str, tf: TaskFile, title: str, *, repos: List[Tuple
             _attrs(("id", "task-settings"), ("class", "new-task task-settings"), ("data-task", name),
                    ("data-mtime", repr(mtime)), ("data-size", size)),
             _attrs(("name", "title"), ("value", title), ("maxlength", 200), ("required", "")),
+            _attrs(("name", "short_name"), ("value", short), ("maxlength", 80), ("spellcheck", "false"),
+                   ("required", "")),
+            _e(SHORT_NAME_NOTE % date if date else SHORT_NAME_NOTE_PLAIN),
             _attrs(("name", "ticket"), ("value", tf.ticket or ""), ("maxlength", 500),
                    ("placeholder", "#123, #456（任意）")),
             "".join(options),

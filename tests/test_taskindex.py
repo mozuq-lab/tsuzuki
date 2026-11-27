@@ -10,7 +10,7 @@ from tsuzuki.config import Config
 from tsuzuki.indexer import _Places, update
 from tsuzuki.privacy import PRIVACY_HINT
 from tsuzuki.store import get_meta
-from tsuzuki.taskindex import refresh_task, sync_tasks
+from tsuzuki.taskindex import move_task, refresh_task, sync_tasks
 from tests.fixtures import FakeClaude, allow_system_tmp, count, make_ledger, write_file
 from tests.test_tasks import SAMPLE
 
@@ -99,6 +99,31 @@ class TaskIndexTest(unittest.TestCase):
         self.assertEqual([r[0] for r in self.conn.execute("SELECT name FROM tasks")], ["2026-11-20-login"])
         paths = [r[0] for r in self.conn.execute("SELECT path FROM documents")]
         self.assertFalse([p for p in paths if "2026-11-21-csv" in p])
+
+    def test_move_task_carries_overrides_and_drops_the_old_rows(self):
+        self.sync()
+        self.conn.execute("INSERT INTO task_overrides VALUES ('2026-11-21-csv', 's1', 'remove', 'x')")
+        self.conn.execute("INSERT INTO task_overrides VALUES ('2026-11-21-csv', 's2', 'add', 'x')")
+        # 新しい名前に前から残っていた記録（同じ組）は、名前を変えたタスクの記録で置き換える
+        self.conn.execute("INSERT INTO task_overrides VALUES ('2026-11-21-tsv', 's1', 'add', 'y')")
+        self.conn.execute("INSERT INTO task_overrides VALUES ('2026-11-20-login', 's3', 'add', 'x')")
+        self.conn.execute("INSERT INTO task_sessions VALUES ('2026-11-21-csv', 's1', 'cwd', 'high')")
+        self.conn.commit()
+        old = self.root + "/2026-11-21-csv"
+        write_file(self.root + "/2026-11-21-csv-2/task.md", "# 別\n")  # 名前の頭が同じ別のタスクの資料は残す
+        self.sync()
+        os.rename(old, self.root + "/2026-11-21-tsv")
+        move_task(self.conn, "2026-11-21-csv", "2026-11-21-tsv", old)
+        self.assertEqual(sorted(tuple(r) for r in self.conn.execute("SELECT task, session_id, action FROM task_overrides")),
+                         [("2026-11-20-login", "s3", "add"), ("2026-11-21-tsv", "s1", "remove"),
+                          ("2026-11-21-tsv", "s2", "add")])
+        self.assertEqual(sorted(r[0] for r in self.conn.execute("SELECT name FROM tasks")),
+                         ["2026-11-20-login", "2026-11-21-csv-2"])
+        self.assertEqual(count(self.conn, "task_sessions"), 0)
+        paths = [r[0] for r in self.conn.execute("SELECT path FROM documents")]
+        self.assertFalse([p for p in paths if p.startswith(old + "/")])
+        self.assertIn(self.root + "/2026-11-21-csv-2/task.md", paths)
+        self.assertIn(self.root + "/2026-11-20-login/research-a.md", paths)
 
     def test_a_moved_task_gets_its_new_path(self):
         # フォルダーを rename で動かすと、task.md の更新時刻も大きさも変わらない。それでも path は付け替える

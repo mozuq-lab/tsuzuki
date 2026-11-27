@@ -40,7 +40,7 @@ class TemplateTextTest(unittest.TestCase):
 
     def test_readme_limits_and_contents(self):
         text = template_text("templates/tasks-README.md", tasks_root_display="~/tasks")
-        self.assertLessEqual(len(text), 2300)
+        self.assertLessEqual(len(text), 2400)  # 名前の変更の決まりと former_names の行を足して、約2,390字
         self.assertTrue(text.endswith("\n\n" + README_SECTION))
         self.assertEqual(readme_section(tasks_root_display="~/tasks"), README_SECTION)
         for word in ("YYYY-MM-DD-", "shared/", "task.md", "research-", "design-", "plan-", "review-", "notes-",

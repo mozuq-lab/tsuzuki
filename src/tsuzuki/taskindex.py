@@ -207,15 +207,30 @@ def forget_task(conn, name: str, path: str) -> None:
     _drop_task(conn, name, path, keep_overrides=False)
 
 
+def move_task(conn, old: str, new: str, old_path: str) -> None:
+    """名前を変えたタスクの台帳を付け替える（フォルダーの名前を変えた後）。1回の書き込みで、手で足した・外した記録
+    （task_overrides）を新しい名前に移し（新しい名前に同じ組の古い記録があれば、移した記録で置き換える）、
+    前の名前の行・会話との結び付き・前のフォルダーの資料を消す。新しい名前の行と資料は refresh_task で入れる。"""
+    with conn:
+        conn.execute("UPDATE OR REPLACE task_overrides SET task = ? WHERE task = ?", (new, old))
+        _delete_task_rows(conn, old, old_path, keep_overrides=True)
+
+
 def _drop_task(conn, name: str, path: Optional[str], *, keep_overrides: bool = False) -> None:
     with conn:
-        conn.execute("DELETE FROM tasks WHERE name = ?", (name,))
-        conn.execute("DELETE FROM task_sessions WHERE task = ?", (name,))
-        if not keep_overrides:
-            conn.execute("DELETE FROM task_overrides WHERE task = ?", (name,))
-        if path:
-            low, high = _bounds(path)
-            conn.execute("DELETE FROM documents WHERE path >= ? AND path < ?", (low, high))
+        _delete_task_rows(conn, name, path, keep_overrides=keep_overrides)
+
+
+def _delete_task_rows(conn, name: str, path: Optional[str], *, keep_overrides: bool) -> None:
+    """タスクの行・会話との結び付き・（keep_overrides でなければ）手で直した記録・path の下の資料を消す。
+    書き込みの区切り（with conn）は呼び出し側が持つ。"""
+    conn.execute("DELETE FROM tasks WHERE name = ?", (name,))
+    conn.execute("DELETE FROM task_sessions WHERE task = ?", (name,))
+    if not keep_overrides:
+        conn.execute("DELETE FROM task_overrides WHERE task = ?", (name,))
+    if path:
+        low, high = _bounds(path)
+        conn.execute("DELETE FROM documents WHERE path >= ? AND path < ?", (low, high))
 
 
 def _sync_shared(conn, cfg: Config, root: str, home: str, places) -> None:

@@ -1187,8 +1187,9 @@ async function openSettings(button) {
 }
 
 // 設定の入力欄の「保存」：入力欄の時刻と大きさを送る。書けたらカードを取り直して戻る。書けなかったときは
-// 入力欄のまま、サーバーの文を知らせに出す
-async function saveSettings(form) {
+// 入力欄のまま、サーバーの文を知らせに出す。短い名前を変えるとき、このフォルダーで始めた会話があれば、
+// サーバーが確かめを返すので、続けるときだけ confirm 付きで送り直す。名前が変わったら、新しい名前のタスクへ移る
+async function saveSettings(form, confirm) {
   if (busyWriting()) return;
   const data = new FormData(form);
   const field = (name) => String(data.get(name) || "");
@@ -1198,16 +1199,25 @@ async function saveSettings(form) {
   let answer;
   try {
     answer = await postWrite("/api/task-settings", { task: form.dataset.task, title: field("title"),
-      ticket: field("ticket"), repo: field("repo"), workspace: field("workspace"),
-      mtime: Number(form.dataset.mtime), size: Number(form.dataset.size) });
+      short_name: field("short_name"), ticket: field("ticket"), repo: field("repo"), workspace: field("workspace"),
+      mtime: Number(form.dataset.mtime), size: Number(form.dataset.size), confirm: confirm === true });
   } finally {
     writing = false;
     if (submit) submit.disabled = false;
   }
   if (!answer) return;
+  if (answer.needs_confirm && confirm !== true) {
+    askToContinue(answer.message, () => saveSettings(form, true));
+    return;
+  }
   toast(answer.message);
   if (!answer.ok) return;
   panes.detail.url = null; // 入力欄から、同じ URL のカードへ戻す
+  if (answer.task && answer.task !== form.dataset.task) {
+    panes.list.url = panes.left.url = null; // 同じ URL でも取り直す（一覧の行と左の数が新しい名前になる）
+    go({ task: answer.task, d: "", s: "", c: "" }, false);
+    return;
+  }
   await reloadTasks();
 }
 
@@ -1443,7 +1453,7 @@ function onSubmit(event) {
     writeTask("/api/task-waiting", form, body);
   } else if (form.id === "task-settings") {
     event.preventDefault();
-    saveSettings(form);
+    saveSettings(form, false);
   } else if (form.id === "ticket-url") {
     event.preventDefault();
     saveTicketUrl(form);

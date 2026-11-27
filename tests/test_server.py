@@ -1,5 +1,6 @@
 """画面のサーバー（server.py）と tsuzuki serve のテスト。合成した記録だけを使う。"""
 import contextlib
+import errno
 import html
 import http.client
 import io
@@ -24,6 +25,7 @@ from tsuzuki import cli, documents, indexer, server, taskwrite
 from tsuzuki.config import Config, read_config, write_tasks_root
 from tsuzuki.indexer import update
 from tsuzuki.server import COOKIE, NO_TASKS_ROOT, TICKET_URL_RESET, TOKEN_FILE, make_server, serve
+from tsuzuki.tasklinks import set_override
 from tsuzuki.tasks import parse_task_md
 from tsuzuki.taskwrite import CHANGED, TaskWriteError
 from tests.fixtures import FakeClaude, assistant, make_git_repo, make_ledger, sid, t, tool_result, user, write_file
@@ -34,6 +36,7 @@ def read_file(path):
 
 
 S1, S8, S9 = sid(1), sid(8), sid(9)  # 対話、親が分からないヘッドレス、S1 の子のヘッドレス
+S2 = sid(2)  # タスクのフォルダーの中で始めた対話（名前の変更のテストで足す）
 GONE = sid(77)  # 記録がなく、入力履歴だけに残るセッション
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-src 'self'; "
        "base-uri 'none'; form-action 'self'")
@@ -1795,6 +1798,200 @@ class TaskServerTest(ServerCase):
         r = self.action("/api/task-settings", dict(body, repo="/gone/repo", title="y", mtime=stamp[0], size=stamp[1]))
         self.assertTrue(r.json()["ok"], r.json())
         self.assertEqual(self.action("/api/task-settings", dict(body, workspace=5)).status, 400)
+
+    # 短い名前を変える
+
+    def settings(self, task, **fields):
+        """設定の入力欄を取り直し、その時刻と大きさで保存する（fields で項目を替える・足す）。"""
+        form = self.frag("/frag/task-settings/" + quote(task))
+        mtime, size = self.card_stamp(form)
+        body = {"task": task, "title": "題", "ticket": "", "repo": self.proj, "workspace": "", "mtime": mtime,
+                "size": size}
+        body.update(fields)
+        return self.action("/api/task-settings", body).json()
+
+    def test_rename_from_the_settings(self):
+        with self.db() as conn:
+            set_override(conn, "2026-11-20-a", S8, "remove", now_iso="2026-11-28T00:00:00Z")
+        self.assertIn('value="a"', self.frag("/frag/task-settings/2026-11-20-a"))
+        r = self.settings("2026-11-20-a", short_name="b")
+        self.assertEqual(r, {"ok": True, "needs_confirm": False, "message": "名前を変えました: 2026-11-20-b",
+                             "task": "2026-11-20-b"})
+        new_md = os.path.join(self.tasks_root, "2026-11-20-b", "task.md")
+        self.assertTrue(os.path.isfile(new_md))
+        self.assertFalse(os.path.exists(os.path.join(self.tasks_root, "2026-11-20-a")))
+        text = self.text(new_md)
+        self.assertIn("former_names: 2026-11-20-a", text)
+        self.assertIn("title: 題\n", text)  # ほかの設定の変更も同じ書き込みで
+        with self.app.connect() as conn:
+            self.assertEqual([r[0] for r in conn.execute("SELECT name FROM tasks ORDER BY name")],
+                             ["2026-11-20-b", "2026-11-22-ログイン"])
+            self.assertEqual({r[0] for r in conn.execute("SELECT task FROM task_overrides")}, {"2026-11-20-b"})
+            self.assertEqual(conn.execute("SELECT former FROM tasks WHERE name = '2026-11-20-b'").fetchone()[0],
+                             '["2026-11-20-a"]')
+            self.assertIsNone(conn.execute("SELECT 1 FROM documents WHERE path LIKE ?",
+                                           ("%/2026-11-20-a/%",)).fetchone())
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM documents WHERE path = ?", (new_md,)).fetchone())
+        self.assertEqual(self.get("/frag/task/2026-11-20-a", cookie=True).status, 404)
+        self.assertIn("<h4>題</h4>", self.frag("/frag/task/2026-11-20-b"))
+        # 前の名前に戻すこともできる（前の名前の記録は足すだけで、同じ名前は2度書かない）
+        r = self.settings("2026-11-20-b", short_name="a")
+        self.assertEqual((r["ok"], r["task"]), (True, "2026-11-20-a"))
+        self.assertIn("former_names: 2026-11-20-a, 2026-11-20-b\n", self.text())
+
+    def test_rename_asks_first_when_conversations_started_in_the_folder(self):
+        folder = os.path.join(self.tasks_root, "2026-11-20-a")
+        doc = os.path.join(folder, "research-x.md")
+        write_file(doc, "# 調べ\n")
+        self.fake.write(folder, S2, [
+            user("フォルダーの中で調べて", t(100), S2, folder),
+            assistant(t(101), S2, folder, text="書きました", tools=[("Write", {"file_path": doc})]),
+        ])
+        self.reindex(tasks_root=Path(self.tasks_root))
+        r = self.settings("2026-11-20-a", short_name="b")
+        self.assertEqual((r["ok"], r["needs_confirm"]), (False, True))
+        self.assertEqual(r["message"], "このフォルダーで始めた会話が 1 件あります。名前を変えると、これらは VS Code の"
+                         "パネルでは再開できなくなります（Terminal と VS Code のターミナルでは再開できます）。続けますか？")
+        self.assertTrue(os.path.isdir(folder))  # まだ動かさない
+        self.assertNotIn("former_names", self.text())
+        r = self.settings("2026-11-20-a", short_name="b", confirm=True)
+        self.assertEqual((r["ok"], r["task"]), (True, "2026-11-20-b"), r)
+        new_doc = os.path.join(self.tasks_root, "2026-11-20-b", "research-x.md")
+        with self.app.connect() as conn:
+            # 会話の記録の中のパスは前の名前のまま。資料とのつながりと結び付けは、新しい名前で読む
+            self.assertEqual([r[0] for r in conn.execute("SELECT path FROM doc_links WHERE session_id = ?", (S2,))],
+                             [new_doc])
+            self.assertEqual([r[0] for r in conn.execute("SELECT task FROM task_sessions WHERE session_id = ?",
+                                                         (S2,))], ["2026-11-20-b"])
+        self.assertIn(S2, self.frag("/frag/task/2026-11-20-b"))
+        self.assertEqual(self.action("/api/task-settings", {"task": "2026-11-20-b", "title": "x", "ticket": "",
+                                                            "repo": "", "workspace": "", "mtime": 1.0, "size": 1,
+                                                            "confirm": "yes"}).status, 400)
+
+    def test_rename_is_refused_while_a_conversation_runs(self):
+        folder = os.path.join(self.tasks_root, "2026-11-20-a")
+        refused = "このタスクの会話が実行中です。終わってから名前を変えてください"
+        # このタスクに結び付いた会話が実行中
+        self.assertTrue(self.action("/api/task-link", {"task": "2026-11-20-a", "session_id": S1,
+                                                       "action": "add"}).json()["ok"])
+        self.fake.live(os.getpid(), S1, self.proj)
+        r = self.settings("2026-11-20-a", short_name="b", confirm=True)
+        self.assertEqual((r["ok"], r["message"]), (False, refused))
+        self.assertTrue(os.path.isdir(folder))
+        # 台帳にない会話でも、フォルダーの中で動いていれば
+        self.fake.live(os.getpid(), sid(55), os.path.join(folder, "sub"))
+        self.assertTrue(self.action("/api/task-link", {"task": "2026-11-20-a", "session_id": S1,
+                                                       "action": "remove"}).json()["ok"])
+        r = self.settings("2026-11-20-a", short_name="b", confirm=True)
+        self.assertEqual((r["ok"], r["message"]), (False, refused))
+        self.assertTrue(os.path.isdir(folder))
+        self.assertEqual(self.text(), TASK_MD % self.proj)
+        # 外で動いている会話なら変えられる
+        self.fake.live(os.getpid(), sid(55), self.proj)
+        self.assertTrue(self.settings("2026-11-20-a", short_name="b", confirm=True)["ok"])
+
+    def test_rename_checks_before_moving(self):
+        folder = os.path.join(self.tasks_root, "2026-11-20-a")
+        # 古い入力欄の時刻
+        form = self.frag("/frag/task-settings/2026-11-20-a")
+        mtime, size = self.card_stamp(form)
+        body = {"task": "2026-11-20-a", "title": "題", "ticket": "", "repo": self.proj, "workspace": "",
+                "short_name": "b", "mtime": mtime - 1, "size": size}
+        self.assertEqual(self.action("/api/task-settings", body).json(),
+                         {"ok": False, "needs_confirm": False, "message": CHANGED})
+        # 場所の一覧にないリポジトリ
+        r = self.settings("2026-11-20-a", short_name="b", repo=self.root)
+        self.assertEqual(r["message"], "リポジトリは場所の一覧から選んでください")
+        # 同じ名前のフォルダーがある
+        write_file(os.path.join(self.tasks_root, "2026-11-20-b", "keep.txt"), "x")
+        r = self.settings("2026-11-20-a", short_name="b")
+        self.assertEqual(r["message"], "その名前のフォルダーがもうあります: 2026-11-20-b")
+        self.assertEqual(os.listdir(os.path.join(self.tasks_root, "2026-11-20-b")), ["keep.txt"])
+        # 台帳にないタスク
+        self.assertEqual(self.action("/api/task-settings", dict(body, task="nope", mtime=mtime)).json()["message"],
+                         "台帳にないタスクです")
+        self.assertTrue(os.path.isdir(folder))
+        self.assertEqual(self.text(), TASK_MD % self.proj)
+
+    def test_rename_rolls_back_when_task_md_fails(self):
+        r = self.settings("2026-11-20-a", short_name="b", confirm=True,
+                          workspace=os.path.join(self.root, "none.code-workspace"))
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["message"], "task.md を書けなかったので、フォルダーの名前を元に戻しました"
+                                       "（ワークスペースを使えません: ファイルがありません）")
+        self.assertTrue(os.path.isfile(self.task_md))
+        self.assertEqual(self.text(), TASK_MD % self.proj)
+        self.assertFalse(os.path.exists(os.path.join(self.tasks_root, "2026-11-20-b")))
+        self.assertEqual(self.get("/frag/task/2026-11-20-a", cookie=True).status, 200)
+        with self.app.connect() as conn:
+            self.assertEqual([r[0] for r in conn.execute("SELECT name FROM tasks ORDER BY name")],
+                             ["2026-11-20-a", "2026-11-22-ログイン"])
+
+    def test_rename_reports_both_paths_when_it_cannot_undo(self):
+        old, new = (os.path.join(self.tasks_root, n) for n in ("2026-11-20-a", "2026-11-20-b"))
+        real_rename, calls = os.rename, []
+
+        def rename(src, dst):
+            calls.append((src, dst))
+            if len(calls) > 1:  # 戻すほうだけ失敗させる
+                raise OSError(errno.EACCES, "Permission denied")
+            real_rename(src, dst)
+        with mock.patch("os.rename", side_effect=rename):
+            r = self.settings("2026-11-20-a", short_name="b", workspace=os.path.join(self.root, "none.code-workspace"))
+        self.assertEqual(calls, [(old, new), (new, old)])
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["message"], "task.md を書けず、フォルダーの名前も戻せませんでした。Finder で %s を %s に"
+                         "戻してください（ワークスペースを使えません: ファイルがありません）" % (new, old))
+        self.assertTrue(os.path.isdir(new))
+
+    def test_rename_rewrites_a_workspace_inside_the_folder(self):
+        folder = os.path.join(self.tasks_root, "2026-11-20-a")
+        ws = os.path.join(folder, "x.code-workspace")
+        write_file(ws, json.dumps({"folders": [{"path": self.proj}]}))
+        # 手で書いた workspace の行（~ の形）。folders に "." はない
+        home_ws = os.path.join(self.home, "x.code-workspace")
+        write_file(home_ws, json.dumps({"folders": [{"path": self.proj}]}))
+        write_file(self.task_md, (TASK_MD % self.proj).replace("repo:", "workspace: %s\nrepo:" % ws, 1))
+        self.reindex(tasks_root=Path(self.tasks_root))
+        r = self.settings("2026-11-20-a", short_name="b", workspace=ws)
+        self.assertEqual((r["ok"], r["message"]), (True, "名前を変えました: 2026-11-20-b"), r)
+        new_ws = os.path.join(self.tasks_root, "2026-11-20-b", "x.code-workspace")
+        text = self.text(os.path.join(self.tasks_root, "2026-11-20-b", "task.md"))
+        self.assertIn("workspace: " + new_ws + "\n", text)
+        # 名前の変更による書き直しでは、ワークスペースに "." を足さない
+        self.assertEqual(json.loads(read_file(new_ws)), {"folders": [{"path": self.proj}]})
+        # 本人が同じ保存でワークスペースを変えたときは、今までどおり足す
+        r = self.settings("2026-11-20-b", short_name="c", workspace="~/x.code-workspace")
+        self.assertEqual((r["ok"], r["message"]),
+                         (True, '名前を変えました: 2026-11-20-c。ワークスペースの folders の先頭に "." を足しました'), r)
+        self.assertIn("workspace: %s\n" % home_ws, self.text(os.path.join(self.tasks_root, "2026-11-20-c", "task.md")))
+        self.assertEqual(json.loads(read_file(home_ws))["folders"], [{"path": "."}, {"path": self.proj}])
+
+    def test_unchanged_or_missing_short_name_keeps_the_folder(self):
+        self.assertTrue(self.settings("2026-11-20-a", short_name="a")["ok"])
+        self.assertTrue(self.settings("2026-11-20-a", short_name=" a ", title="別の題")["ok"])
+        self.assertTrue(self.settings("2026-11-20-a")["ok"])  # 前の画面は short_name を送らない
+        self.assertTrue(os.path.isfile(self.task_md))
+        self.assertNotIn("former_names", self.text())
+        for short, message in (("", "タスクの短い名前に使えない文字があります（空、/、先頭の . は使えません）"),
+                               ("a,b", "フォルダーの名前に「,」は使えません（前の名前の記録で区切りに使うため）: a,b")):
+            r = self.settings("2026-11-20-a", short_name=short)
+            self.assertEqual((r["ok"], r["message"]), (False, message))
+        self.assertTrue(os.path.isfile(self.task_md))
+        self.assertEqual(self.action("/api/task-settings", dict(task="2026-11-20-a", title="x", ticket="", repo="",
+                                                                workspace="", mtime=1.0, size=1,
+                                                                short_name=5)).status, 400)
+
+    def test_saving_a_hand_made_name_keeps_the_folder(self):
+        # 空白を含む手で作ったフォルダー名は、そろえると別の名前になる。入れておいた短い名前のまま保存しても動かさない
+        for name, short in (("notes 2", "notes 2"), ("2026-11-19-foo bar", "foo bar")):
+            write_file(os.path.join(self.tasks_root, name, "task.md"), "# メモ\n")
+            self.reindex(tasks_root=Path(self.tasks_root))
+            self.assertIn('value="%s"' % short, self.frag("/frag/task-settings/" + quote(name)))
+            r = self.settings(name, short_name=short, repo="")
+            self.assertEqual((r["ok"], r["message"]), (True, "設定を変えました"), name)
+            self.assertNotIn("task", r)
+            self.assertIn("title: 題\n", self.text(os.path.join(self.tasks_root, name, "task.md")))
 
     def test_task_stage_and_waiting(self):
         stamp = self.card_stamp(self.frag("/frag/task/2026-11-20-a"))

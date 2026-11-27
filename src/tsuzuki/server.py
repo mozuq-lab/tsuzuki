@@ -48,12 +48,14 @@ from tsuzuki.search import (DEFAULT_TARGETS, MAX_TERM_CHARS, MAX_TERMS, ORDERS, 
                            SearchQuery, SearchResult, conversation_turns, parse_query, search)
 from tsuzuki.sources.live import LiveSession, live_sessions
 from tsuzuki.store import LEDGER_FILENAME, get_meta, open_ledger, set_meta
-from tsuzuki.taskindex import ROOT_KEY, forget_task, refresh_task, reset_task_index
+from tsuzuki.taskindex import ROOT_KEY, forget_task, move_task, refresh_task, reset_task_index
 from tsuzuki.tasklinks import link_tasks, set_override
 from tsuzuki.taskprep import TaskPrepError
+from tsuzuki.taskrename import current_path, rewrite_doc_links
 from tsuzuki.taskstart import start_dir
 from tsuzuki.tasks import SHARED_DIR, TASK_MD, is_task_dir_name, parse_task_md, stage_label, task_title, within
-from tsuzuki.taskwrite import TaskWriteError, copy_into_task, create_task, place_tasks_readme, set_fields, set_waiting, trash_task, update_settings
+from tsuzuki.taskwrite import (CHANGED, TaskWriteError, copy_into_task, create_task, place_tasks_readme, rename_task,
+                                renamed_folder_name, set_fields, set_waiting, short_name_of, trash_task, update_settings)
 from tsuzuki.workspace import WorkspaceError, ensure_self_first
 
 TOKEN_FILE = "token"
@@ -135,17 +137,20 @@ TASK_MADE = "タスクを作りました"
 STAGE_SET = "段階を「%s」にしました"
 WAITING_SET = {True: "待ちにしました", False: "待ちを解きました"}
 SETTINGS_SET = "設定を変えました"
-WORKSPACE_ADDED = SETTINGS_SET + '。ワークスペースの folders の先頭に "." を足しました'
-TASK_WORKSPACE_ADDED = TASK_MADE + '。ワークスペースの folders の先頭に "." を足しました'
-TASK_WORKSPACE_ELSEWHERE = (TASK_MADE + '。ワークスペースの folders に "." がありますが、先頭ではありません。'
-                            "パネルの新しい会話をこのフォルダーで始めるには、先頭に移してください")
-TASK_WORKSPACE_NOT_ADDED = (TASK_MADE + '。ただし、ワークスペースに "." を足せませんでした（%s）。'
-                            '手で folders の先頭に {"path": "."} を足してください')
-WORKSPACE_ELSEWHERE = (SETTINGS_SET + '。ワークスペースの folders に "." がありますが、先頭ではありません。'
+# ワークスペースの folders の先頭に "." を足した結果。TASK_MADE・SETTINGS_SET・RENAMED の文の後ろに続ける
+WORKSPACE_ADDED = '。ワークスペースの folders の先頭に "." を足しました'
+WORKSPACE_ELSEWHERE = ('。ワークスペースの folders に "." がありますが、先頭ではありません。'
                        "パネルの新しい会話をこのフォルダーで始めるには、先頭に移してください")
-WORKSPACE_NOT_ADDED = (SETTINGS_SET + '。ただし、ワークスペースに "." を足せませんでした（%s）。'
+WORKSPACE_NOT_ADDED = ('。ただし、ワークスペースに "." を足せませんでした（%s）。'
                        '手で folders の先頭に {"path": "."} を足してください')
 NO_SETTINGS_CHANGE = "変わった所はありません"
+RENAMED = "名前を変えました: %s"
+RENAME_LIVE = "このタスクの会話が実行中です。終わってから名前を変えてください"
+RENAME_CONFIRM = ("このフォルダーで始めた会話が %d 件あります。名前を変えると、これらは VS Code のパネルでは再開できなく"
+                  "なります（Terminal と VS Code のターミナルでは再開できます）。続けますか？")
+RENAME_UNDONE = "task.md を書けなかったので、フォルダーの名前を元に戻しました（%s）"
+RENAME_STUCK = "task.md を書けず、フォルダーの名前も戻せませんでした。Finder で %s を %s に戻してください（%s）"
+RENAME_LEDGER_LATER = "。ただし、台帳に書けなかったので、次の更新で読み直します"  # RENAMED の後ろに続ける
 TICKET_URL_SET = "チケットのリンク先を変えました"
 TASKS_ROOT_SET = "タスクの置き場所を変えました。新しい置き場所のタスクを読み込んでいます"
 TASKS_ROOT_MISSING = ("今の置き場所のタスク %d件は、新しい置き場所にありません。切り替えると、それらは一覧から消えます。"
@@ -948,9 +953,12 @@ def _task_workspace(app: App, conn: sqlite3.Connection, task: str) -> Optional[s
             workspace = parse_task_md(f.read()).workspace
     except (OSError, ValueError):
         return None
-    if workspace and (workspace == "~" or workspace.startswith("~/")):
-        workspace = str(app.home).rstrip("/") + workspace[1:]
-    return workspace
+    return _home_expanded(app, workspace) if workspace else workspace
+
+
+def _home_expanded(app: App, path: str) -> str:
+    """手で書かれた先頭の ~ を home で展開する。"""
+    return str(app.home).rstrip("/") + path[1:] if path == "~" or path.startswith("~/") else path
 
 
 def _api_open(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1014,12 +1022,7 @@ def _api_task_new(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     except (OSError, UnicodeDecodeError):
         written = None
     if written:  # 設定と同じく、task.md を書けたあとで、ワークスペースの folders の先頭に "." を足す
-        try:
-            result = ensure_self_first(written, claude_dir=app.claude_dir)
-        except WorkspaceError as e:
-            message = TASK_WORKSPACE_NOT_ADDED % e
-        else:
-            message = {"added": TASK_WORKSPACE_ADDED, "elsewhere": TASK_WORKSPACE_ELSEWHERE}.get(result, TASK_MADE)
+        message = _add_self_first(app, written, TASK_MADE)
     return {"ok": True, "message": message, "task": name, "task_md": str(task_md)}
 
 
@@ -1043,49 +1046,186 @@ def _api_task_waiting(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
 
 def _api_task_settings(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
     """題・チケット・リポジトリ・ワークスペースを task.md に書く。リポジトリは、空か、今の task.md の値か、
-    場所の一覧のものだけ。"""
+    場所の一覧のものだけ。short_name（短い名前）が今と違えば、フォルダーの名前も変える（_rename_task_folder）。
+    short_name を送らない要求（前の画面）では、名前は変えない。"""
     task, title = _task_text(data, "task"), _task_text(data, "title")
     ticket, repo, workspace = _task_text(data, "ticket"), _task_text(data, "repo"), _task_text(data, "workspace")
     mtime, size = _task_stamp(data)
+    confirm = data.get("confirm", False)
+    if not isinstance(confirm, bool):
+        raise _HttpError(400, BAD_REQUEST % "confirm")
+    short_name = _task_text(data, "short_name") if "short_name" in data else None
+    # 入れておいた短い名前のままなら変えない。手で付けた名前（空白を含むなど）は、そろえると別の名前になるので、
+    # そろえる前の文字で比べる
+    if short_name is not None and short_name != short_name_of(task):
+        try:
+            new_name = renamed_folder_name(task, short_name)
+        except TaskWriteError as e:
+            return _task_failed(str(e))
+        if new_name != task:
+            fields = {"title": title, "ticket": ticket, "repo": repo, "workspace": workspace}
+            return _rename_task_folder(app, task, new_name, fields, mtime, size, confirm)
     changed = []  # type: List[bool]
     saved = []  # type: List[str]  # 書いたあとのワークスペース（新しい値か変えた値のときだけ。空なら入れない）
 
-    def workspace_of(md: Path) -> Optional[str]:
-        try:
-            with open(str(md), "rb") as f:
-                return parse_task_md(f.read().decode("utf-8")).workspace
-        except (OSError, UnicodeDecodeError):
-            return None
-
     def write(md: Path, root: Path) -> None:
-        wanted = " ".join(repo.split())
-        if wanted:
-            try:
-                with open(str(md), "rb") as f:
-                    current = parse_task_md(f.read().decode("utf-8")).repo
-            except (OSError, UnicodeDecodeError):
-                current = None  # 読めないときは update_settings が断る
+        if repo.strip():
             with app.connect() as conn:
-                if wanted != current and wanted not in {path for path, _ in _repo_choices(app, conn)}:
+                if not _repo_allowed(app, conn, str(md), repo):
                     raise TaskWriteError(NOT_A_PLACE)
-        before = workspace_of(md)
+        before = _md_workspace(str(md))
         changed.append(update_settings(md, root, title=title, ticket=ticket, repo=repo, workspace=workspace,
                                        home=str(app.home), expect_mtime=mtime, expect_size=size,
                                        claude_dir=app.claude_dir))
-        after = workspace_of(md)
+        after = _md_workspace(str(md))
         if changed[-1] and after and after != before:
             saved.append(after)
     answer = _write_task_md(app, task, write, SETTINGS_SET)
     if answer["ok"] and not any(changed):
         answer["message"] = NO_SETTINGS_CHANGE
     elif answer["ok"] and saved:  # task.md に書けたあとで、ワークスペースのファイルに "." を足す
-        try:
-            result = ensure_self_first(saved[0], claude_dir=app.claude_dir)
-        except WorkspaceError as e:
-            answer["message"] = WORKSPACE_NOT_ADDED % e
-        else:
-            answer["message"] = {"added": WORKSPACE_ADDED, "elsewhere": WORKSPACE_ELSEWHERE}.get(result, SETTINGS_SET)
+        answer["message"] = _add_self_first(app, saved[0], SETTINGS_SET)
     return answer
+
+
+def _rename_task_folder(app: App, task: str, new_name: str, fields: Dict[str, str], mtime: float, size: int,
+                        confirm: bool) -> Dict[str, Any]:
+    """設定の保存で短い名前が変わったとき、タスクのフォルダーの名前を new_name に変え、task.md に設定（fields）と
+    前の名前（former_names）を1回で書く。更新の鍵と1つの接続の中で、確かめ（置き場所・台帳のフォルダー・
+    task.md の時刻と大きさ・リポジトリ・実行中の会話・このフォルダーで始めた会話）→ フォルダーの名前 → task.md →
+    台帳の順に行う。確かめで断るときは何も動かさない。task.md を書けなければ、フォルダーの名前を元に戻す。"""
+    with update_lock(app.ledger_dir), app.connect() as conn:
+        root = app.tasks_root
+        if root is None:
+            return _task_failed(NO_TASKS_ROOT)
+        folder = _task_folder(conn, task)
+        if folder is None:
+            return _task_failed(UNKNOWN_TASK)
+        md = os.path.join(folder, TASK_MD)
+        try:
+            st = os.stat(md)
+        except OSError as e:
+            return _task_failed(CANNOT_WRITE % os_error_text(e))
+        if st.st_mtime != mtime or st.st_size != size:  # 入力欄を開いた後に書き換わった
+            return _task_failed(CHANGED)
+        if not _repo_allowed(app, conn, md, fields["repo"]):
+            return _task_failed(NOT_A_PLACE)
+        if _running_in(app, conn, task, folder):
+            return _task_failed(RENAME_LIVE)
+        started = _sessions_started_in(conn, folder)
+        if started and not confirm:
+            return {"ok": False, "needs_confirm": True, "message": RENAME_CONFIRM % started}
+        old_real = os.path.realpath(folder)
+        new_folder = os.path.join(os.path.dirname(folder), new_name)  # 台帳の書き方のパス
+        before = _md_workspace(md)
+        try:
+            moved = rename_task(folder, root, new_name, claude_dir=app.claude_dir)
+        except TaskWriteError as e:
+            return _task_failed(str(e))
+        folders = {os.path.normpath(folder): new_folder, old_real: moved}
+
+        def relocated(value: str) -> str:
+            """前のフォルダーの中を指すパス（~ は展開する）を新しいフォルダーの中に移したもの。ほかはそのまま。"""
+            if not value.strip():
+                return value
+            return current_path(os.path.normpath(_home_expanded(app, value.strip())), folders) or value
+        try:
+            update_settings(Path(new_folder) / TASK_MD, root, title=fields["title"], ticket=fields["ticket"],
+                            repo=fields["repo"], workspace=relocated(fields["workspace"]), home=str(app.home),
+                            expect_mtime=mtime, expect_size=size, claude_dir=app.claude_dir, former=task)
+            after = _md_workspace(os.path.join(new_folder, TASK_MD))
+        except Exception as e:  # 何が起きても、フォルダーの名前を戻してから答える
+            reason = os_error_text(e) if isinstance(e, OSError) else str(e)
+            return _undo_rename(app, conn, task, moved, old_real, reason)
+        done = RENAMED % new_name
+        try:  # 台帳：手で直した記録を新しい名前へ移し、新しい名前で読み直し、前の名前のパスを読み替えて、結び付け直す
+            move_task(conn, task, new_name, folder)
+            refresh_task(conn, app.cfg, tasks_root=str(root), home=app.home, name=new_name)
+            rewrite_doc_links(conn)
+            link_tasks(conn, tasks_root=str(root), default_branches=app.cfg.default_branches)
+        except Exception:  # フォルダーと task.md は書けている。台帳は次の更新が読み直す
+            done += RENAME_LEDGER_LATER
+            app.request_update()
+    app.forget_searches()
+    # ワークスペースの folders に "." を足すのは、本人が入力欄のワークスペースを変えたときだけ
+    # （前のフォルダーの中を指していた値を新しいフォルダーに書き直しただけなら足さない）
+    if after and after != relocated(before or ""):
+        done = _add_self_first(app, after, done)
+    return {"ok": True, "needs_confirm": False, "message": done, "task": new_name}
+
+
+def _undo_rename(app: App, conn: sqlite3.Connection, task: str, moved: str, old: str, reason: str) -> Dict[str, Any]:
+    """task.md を書けなかったとき、フォルダーの名前を old に戻し（戻す先に別の物ができていれば戻さない）、
+    前の名前のタスクを読み直す。戻せなければ、両方のパスを示して Finder で戻してもらう。"""
+    try:
+        taken = os.path.lexists(old) and not os.path.samefile(old, moved)  # 大文字小文字だけの違いは同じフォルダー
+        if not taken:
+            os.rename(moved, old)
+    except OSError:
+        taken = True
+    answer = _task_failed((RENAME_STUCK % (moved, old, reason)) if taken else RENAME_UNDONE % reason)
+    try:
+        _reread_task(app, conn, task)
+    except Exception:  # 台帳は次の更新が読み直す（答えは返す）
+        pass
+    return answer
+
+
+def _repo_allowed(app: App, conn: sqlite3.Connection, md: str, repo: str) -> bool:
+    """設定のリポジトリの選択が、空か、今の task.md の値か、場所の一覧のものか。"""
+    wanted = " ".join(repo.split())
+    if not wanted:
+        return True
+    try:
+        with open(md, "rb") as f:
+            current = parse_task_md(f.read().decode("utf-8")).repo
+    except (OSError, UnicodeDecodeError):
+        current = None  # 読めないときは update_settings が断る
+    return wanted == current or wanted in {path for path, _ in _repo_choices(app, conn)}
+
+
+def _md_workspace(md: str) -> Optional[str]:
+    """task.md の workspace の行の値（書かれたまま）。読めなければ None。"""
+    try:
+        with open(md, "rb") as f:
+            return parse_task_md(f.read().decode("utf-8")).workspace
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _running_in(app: App, conn: sqlite3.Connection, task: str, folder: str) -> bool:
+    """このタスクに結び付いた会話か、フォルダーの中で動いている会話が、実行中か。"""
+    live = app.live()
+    if not live:
+        return False
+    linked = {row[0] for row in conn.execute("SELECT session_id FROM task_sessions WHERE task = ?", (task,))}
+    places = {os.path.normpath(folder), os.path.realpath(folder)}
+    for session in live.values():
+        cwd = os.path.normpath(session.cwd) if session.cwd else ""
+        if session.session_id in linked or (cwd and any(within(cwd, place) for place in places)):
+            return True
+    return False
+
+
+def _sessions_started_in(conn: sqlite3.Connection, folder: str) -> int:
+    """作業ディレクトリ（sessions.cwd）がフォルダーそのものかその中の会話の数（中身のないセッションは数えない）。"""
+    where, args = [], []  # type: List[str], List[str]
+    for place in sorted({os.path.normpath(folder), os.path.realpath(folder)}):
+        base = place.rstrip("/")
+        where.append("cwd = ? OR (cwd >= ? AND cwd < ?)")  # "/" の次の文字が "0"
+        args += [base, base + "/", base + "0"]
+    return conn.execute("SELECT COUNT(*) FROM sessions WHERE kind != 'empty' AND (%s)" % " OR ".join(where),
+                        args).fetchone()[0]
+
+
+def _add_self_first(app: App, workspace: str, done: str) -> str:
+    """task.md に書けたあとで、ワークスペースの folders の先頭に "." を足し、答えの文（done に、足した結果を
+    続けたもの）を返す。"""
+    try:
+        result = ensure_self_first(workspace, claude_dir=app.claude_dir)
+    except WorkspaceError as e:
+        return done + WORKSPACE_NOT_ADDED % e
+    return done + {"added": WORKSPACE_ADDED, "elsewhere": WORKSPACE_ELSEWHERE}.get(result, "")
 
 
 def _api_ticket_url(app: App, data: Dict[str, Any]) -> Dict[str, Any]:
