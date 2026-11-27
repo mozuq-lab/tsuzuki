@@ -90,13 +90,17 @@ def update(conn: sqlite3.Connection, cfg: Config, *, claude_dir: Path, ledger_di
         errors = _sync_history_and_lineage(conn, cfg, claude_dir, ledger_dir, places)
         _assign_places(conn, places)
         docs = _update_documents(conn, cfg, home, results, places, now(), tasks)
-        rewrite_doc_links(conn)  # 前のフォルダー名のパスを今のパスに（取り込んだ分も、前の回の台帳の分も）
-        relations = infer_relations(conn)
+        sync, renamed = None, 0
         if tasks is not None:
             sync = sync_tasks(conn, cfg, tasks_root=tasks, home=home, places=places)
             if sync.error:
                 errors.append(sync.error)
-            renamed = rewrite_doc_links(conn)  # 今回の同期で前の名前が増えた分
+            # 前のフォルダー名のパスを今のパスに（取り込んだ分も、前の回の台帳の分も）。同期の前に書き換えると、
+            # 前の名前で新しく作ったタスクがまだ表にないので、その資料をほかのタスクへ移してしまう
+            renamed = rewrite_doc_links(conn)
+        # つながりの推定は doc_links を読むので、書き換えの後に計算する
+        relations = infer_relations(conn)
+        if sync is not None:
             _relink_tasks(conn, cfg, tasks, changed=sync.changed or bool(results) or renamed > 0)
         warning = _check_format(conn, results)
         # 更新の途中で forget・purge が終わっていれば、この回が作り直したそのセッションの行を消す

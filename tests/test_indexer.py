@@ -517,6 +517,31 @@ class IndexerTest(unittest.TestCase):
         rows = [tuple(r) for r in self.conn.execute("SELECT task, session_id, rule FROM task_sessions")]
         self.assertEqual(rows, [("2026-11-19-search", sid, "cwd")])
 
+    def test_new_task_reusing_a_former_name_keeps_its_own_links(self):
+        # 「auth」は前に「login」から名前を変えた。同じ日に、新しいタスクが前の名前「login」で作られ、
+        # その中に資料を書いた会話が、そのタスクを初めて同期する回に取り込まれる
+        ctx = allow_system_tmp()
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+        root = os.path.join(self.d, "tasks")
+        write_file(os.path.join(root, "2026-11-28-auth", "task.md"),
+                   "---\ntitle: auth\nformer_names: 2026-11-28-login\n---\n# auth\n")
+        self.run_update(tasks_root=Path(root))
+        new = os.path.join(root, "2026-11-28-login")
+        write_file(os.path.join(new, "task.md"), "---\ntitle: login\n---\n# login\n")
+        repo = make_git_repo(self.d, "repo")
+        s = sid(5)
+        self.fake.write(repo, s, [user("書いて", t(0), s, repo),
+                                  assistant(t(1), s, repo, tools=[("Write", {"file_path": new + "/design-x.md"})])])
+        write_file(new + "/design-x.md", "# x\n")
+        for _ in range(2):  # 次の回にも、ほかのタスクへ移らない
+            self.run_update(tasks_root=Path(root))
+            paths = [r[0] for r in self.conn.execute("SELECT path FROM doc_links WHERE session_id = ?", (s,))]
+            self.assertEqual(paths, [new + "/design-x.md"])
+            rows = [tuple(r) for r in self.conn.execute("SELECT task, rule FROM task_sessions WHERE session_id = ?",
+                                                        (s,))]
+            self.assertEqual(rows, [("2026-11-28-login", "wrote")])
+
     def test_tmp_cwd_rules(self):
         repo = make_git_repo(self.d, "repo")
         other = make_git_repo(self.d, "other")
